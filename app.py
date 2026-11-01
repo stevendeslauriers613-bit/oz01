@@ -11,8 +11,6 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
