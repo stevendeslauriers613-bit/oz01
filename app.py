@@ -16,7 +16,7 @@ import openpyxl
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-# --- DROPBOX SETUP ---
+# --- DROPBOX SETUP & STARTUP SYNC ---
 DROPBOX_CREDENTIALS_FILE = "dropbox_credentials.json"
 DROPBOX_FOLDER_PATH = "/OZ_Store_Uploads"
 
@@ -44,10 +44,41 @@ def ensure_dropbox_folder(dbx):
         dbx.files_create_folder_v2(DROPBOX_FOLDER_PATH)
 
 
-def upload_to_dropbox(dbx, filename, file_data):
-    dropbox_path = f"{DROPBOX_FOLDER_PATH}/{filename}"
-    dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-    return f"dropbox://{dropbox_path}"
+def sync_from_dropbox_on_startup():
+    """Automatically check Dropbox and sync master state/files on app boot."""
+    try:
+        dbx = get_dropbox_client()
+        if not dbx:
+            return
+        ensure_dropbox_folder(dbx)
+        
+        # Pull master store state if present
+        try:
+            metadata, res = dbx.files_download(f"{DROPBOX_FOLDER_PATH}/master_store_state.json")
+            state_data = json.loads(res.content.decode('utf-8'))
+            # Auto-save remote state into local SQLite database if needed
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            for spk, val in state_data.items():
+                cursor.execute(
+                    "INSERT OR REPLACE INTO store_data (store_period_key, cooh_text, prev_cooh, brinks_total, chargebacks_text, checklist_json, inventory_json, inventory_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        spk,
+                        val.get("cooh_text", ""),
+                        val.get("prev_cooh", ""),
+                        val.get("brinks_total", ""),
+                        val.get("chargebacks_text", "Nothing to report."),
+                        json.dumps(val.get("checklist_json", {})),
+                        json.dumps(val.get("inventory_data")) if val.get("inventory_data") else None,
+                        val.get("inventory_filename", "")
+                    )
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            pass
+    except Exception as e:
+        print("Dropbox startup sync error:", e)
 
 
 # Set page configuration
@@ -117,6 +148,9 @@ def init_db():
 
 
 init_db()
+
+# Run automatic Dropbox cloud sync on every application boot
+sync_from_dropbox_on_startup()
 
 # --- HANDLE ACTIONS ---
 query_params = st.query_params
