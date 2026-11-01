@@ -88,7 +88,6 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS store_files (id INTEGER PRIMARY KEY AUTOINCREMENT, store_period_key TEXT, category TEXT, filename TEXT, filepath TEXT)"
     )
 
-    # Ensure columns exist if upgrading from older DB version
     try:
         cursor.execute("ALTER TABLE store_data ADD COLUMN brinks_total TEXT")
     except Exception:
@@ -120,7 +119,7 @@ def init_db():
 
 init_db()
 
-# --- BACKEND API ENDPOINTS FOR PERSISTENCE & UPLOADS ---
+# --- BACKEND API ENDPOINTS & ACTION HANDLERS ---
 query_params = st.query_params
 
 if "action" in query_params:
@@ -262,7 +261,7 @@ if db_files:
         fj[spk][cat].append({"id": fid, "filename": fname})
     files_json = json.dumps(fj)
 
-# Fetch store data (checklist & inventory)
+# Fetch store data
 cursor.execute(
     "SELECT store_period_key, cooh_text, cooh_date, brinks_total, prev_cooh, chargebacks_text, checklist_json, inventory_json, inventory_filename FROM store_data")
 db_store_data = cursor.fetchall()
@@ -317,7 +316,7 @@ add_user_btn_html = (
     else ""
 )
 
-# --- FULL HTML UI WITH PERSISTENCE, BRINKS, PREV COOH & INVENTORY FORMATTER ---
+# --- FULL HTML UI WITH PERSISTENCE, BRINKS RECONCILIATION & FORMATTER ---
 html_code = """
 <!DOCTYPE html>
 <html lang="en">
@@ -516,45 +515,44 @@ html_code = """
 
                         <div class="space-y-3.5 max-h-[480px] overflow-y-auto pr-2" id="checklist-container">
 
-                            <!-- 1. Cash on Hand & Brinks Reconciliation Inputs -->
-                            <div class="bg-white p-4 rounded-xl border border-zinc-200 space-y-3 shadow-xs">
-                                <div class="flex justify-between items-center border-b border-zinc-100 pb-2">
-                                    <label class="block text-xs font-bold text-emerald-800">Cash & Brinks Reconciliation Inputs</label>
+                            <!-- 1. Cash on Hand -->
+                            <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-2 shadow-xs">
+                                <div class="flex justify-between items-center">
+                                    <label class="block text-xs font-bold text-emerald-800">Cash On Hand - End of Day</label>
                                     <input type="date" id="cooh-date" onchange="scheduleAutoSave()" class="bg-white text-zinc-700 text-[11px] px-2 py-1 rounded border border-zinc-300">
                                 </div>
-                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <div>
-                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Previous Month's End Cash</label>
-                                        <input type="text" id="prev-cooh" placeholder="$0.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Total Brinks Deposits</label>
-                                        <input type="text" id="brinks-total" placeholder="$0.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Current End Cash on Hand</label>
-                                        <input type="text" id="cooh-text" placeholder="$0.00" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
-                                    </div>
-                                </div>
-                                <div class="flex items-center justify-between pt-1">
-                                    <div id="files-cooh" class="text-[11px] text-zinc-600">No files uploaded</div>
-                                    <div class="flex gap-1">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <input type="text" id="cooh-text" placeholder="Enter amount e.g. $24,521.10" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                    <div class="flex flex-col gap-1">
                                         <input type="file" id="cooh-file" multiple onchange="handleItemFiles('cooh', this)" class="hidden">
-                                        <button type="button" onclick="document.getElementById('cooh-file').click()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-medium py-1 px-2.5 rounded border border-emerald-300">📎 Upload Cash Docs</button>
-                                        <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200">🗑️</button>
+                                        <div class="flex gap-1">
+                                            <button type="button" onclick="document.getElementById('cooh-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">📎 Browse & Upload Document</button>
+                                            <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                        </div>
                                     </div>
                                 </div>
+                                <div id="files-cooh" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
                             </div>
 
-                            <!-- 2. Brinks Book -->
-                            <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-2 shadow-xs">
+                            <!-- 2. Brinks Book (Includes Total Brinks Deposits & Previous Month's COOH) -->
+                            <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-3 shadow-xs">
                                 <div class="flex items-center justify-between">
                                     <label class="flex items-center gap-2 text-xs font-bold text-emerald-800 cursor-pointer">
-                                        <input type="checkbox" id="brinks-chk" onchange="updateCompletionBadge(); scheduleAutoSave();" class="accent-emerald-600 w-4 h-4 rounded"> Brinks Book (Folder)
+                                        <input type="checkbox" id="brinks-chk" onchange="updateCompletionBadge(); scheduleAutoSave();" class="accent-emerald-600 w-4 h-4 rounded"> Brinks Book (Folder & Deposits Reconciliation)
                                     </label>
                                     <input type="date" id="brinks-date" onchange="scheduleAutoSave()" class="bg-white text-zinc-700 text-[11px] px-2 py-1 rounded border border-zinc-300">
                                 </div>
-                                <div class="pl-5 space-y-2">
+                                <div class="pl-5 space-y-3 bg-zinc-50 p-3 rounded-lg border border-zinc-200">
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Total Brinks Deposits ($)</label>
+                                            <input type="text" id="brinks-total" placeholder="e.g. $45,200.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded px-2.5 py-1.5 text-xs text-zinc-800">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Cash on Hand (End of Last Month) ($)</label>
+                                            <input type="text" id="prev-cooh" placeholder="e.g. $18,450.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded px-2.5 py-1.5 text-xs text-zinc-800">
+                                        </div>
+                                    </div>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                                         <input type="text" id="brinks-note" placeholder="Add notes..." oninput="syncNotes('brinks', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                         <div class="flex flex-col gap-1">
@@ -759,7 +757,7 @@ html_code = """
                         </thead>
                         <tbody id="portal-table-body" class="divide-y divide-emerald-800/60 text-emerald-100">
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Cash On Hand - End of Day</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-cooh">No date</td><td class="p-3" id="table-files-cooh">No files</td><td class="p-3 text-emerald-100" id="note-cooh">Not entered</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Brinks Book (Photos highlighted)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-brinks">Pending</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-brinks">No date</td><td class="p-3" id="table-files-brinks">No files</td><td class="p-3 text-emerald-100" id="note-brinks">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Brinks Book (Deposits & Photos)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-brinks">Pending</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-brinks">No date</td><td class="p-3" id="table-files-brinks">No files</td><td class="p-3 text-emerald-100" id="note-brinks">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Inventory Summary</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green1">No files</td><td class="p-3 text-emerald-100" id="note-green1">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Financials</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green2">No files</td><td class="p-3 text-emerald-100" id="note-green2">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Payment Types</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green3">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green3">No files</td><td class="p-3 text-emerald-100" id="note-green3">No notes</td></tr>
