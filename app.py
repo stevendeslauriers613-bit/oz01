@@ -12,7 +12,6 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
@@ -119,7 +118,7 @@ def init_db():
 
 init_db()
 
-# --- BACKEND API ENDPOINTS & ACTION HANDLERS ---
+# --- HANDLE ACTIONS ---
 query_params = st.query_params
 
 if "action" in query_params:
@@ -146,28 +145,6 @@ if "action" in query_params:
         username = query_params.get("username", "").lower().strip()
         if username:
             cursor.execute("DELETE FROM users WHERE username = ?", (username,))
-            conn.commit()
-
-    elif action == "delete_file":
-        file_id = query_params.get("file_id")
-        if file_id:
-            cursor.execute("SELECT filepath FROM store_files WHERE id = ?", (file_id,))
-            f_row = cursor.fetchone()
-            if f_row:
-                filepath = f_row[0]
-                if filepath.startswith("dropbox://"):
-                    dbx = get_dropbox_client()
-                    if dbx:
-                        try:
-                            dbx.files_delete_v2(filepath.replace("dropbox://", ""))
-                        except Exception:
-                            pass
-                elif os.path.exists(filepath):
-                    try:
-                        os.remove(filepath)
-                    except Exception:
-                        pass
-            cursor.execute("DELETE FROM store_files WHERE id = ?", (file_id,))
             conn.commit()
 
     elif action == "sign_out":
@@ -236,7 +213,7 @@ if not st.session_state.logged_in:
                     st.error("Invalid username or password.")
     st.stop()
 
-# --- FETCH USERS, FILES & STORE DATA FOR JAVASCRIPT INJECTION ---
+# --- FETCH DATA ---
 conn = sqlite3.connect(DB_FILE)
 cursor = conn.cursor()
 cursor.execute("SELECT username, name, role, password FROM users")
@@ -246,10 +223,8 @@ users_dict = {}
 for u, n, r, p in db_users:
     users_dict[u] = {"name": n, "role": r, "pass": p}
 
-# Fetch files
 cursor.execute("SELECT id, store_period_key, category, filename FROM store_files")
 db_files = cursor.fetchall()
-
 files_json = "{}"
 if db_files:
     fj = {}
@@ -261,7 +236,6 @@ if db_files:
         fj[spk][cat].append({"id": fid, "filename": fname})
     files_json = json.dumps(fj)
 
-# Fetch store data
 cursor.execute(
     "SELECT store_period_key, cooh_text, cooh_date, brinks_total, prev_cooh, chargebacks_text, checklist_json, inventory_json, inventory_filename FROM store_data")
 db_store_data = cursor.fetchall()
@@ -316,7 +290,7 @@ add_user_btn_html = (
     else ""
 )
 
-# --- FULL HTML UI WITH RECONCILED CASH & BRINKS SECTIONS ---
+# --- MAIN APP UI HTML & JS ---
 html_code = """
 <!DOCTYPE html>
 <html lang="en">
@@ -515,7 +489,7 @@ html_code = """
 
                         <div class="space-y-3.5 max-h-[480px] overflow-y-auto pr-2" id="checklist-container">
 
-                            <!-- 1. Cash on Hand (Includes Current COOH & Previous Month's COOH) -->
+                            <!-- 1. Cash on Hand -->
                             <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-2.5 shadow-xs">
                                 <div class="flex justify-between items-center">
                                     <label class="block text-xs font-bold text-emerald-800">Cash On Hand (End of Current Month & End of Last Month)</label>
@@ -541,7 +515,7 @@ html_code = """
                                 </div>
                             </div>
 
-                            <!-- 2. Brinks Book (Includes Total Brinks Deposits & Folder Uploads) -->
+                            <!-- 2. Brinks Book -->
                             <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-3 shadow-xs">
                                 <div class="flex items-center justify-between">
                                     <label class="flex items-center gap-2 text-xs font-bold text-emerald-800 cursor-pointer">
@@ -1187,40 +1161,7 @@ html_code = """
             renderInventoryTable();
             showCSVFileInfo(fileName);
             updateFinancialSummary();
-
-            const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
-            const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
-            const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
-
-            fetch('http://127.0.0.1:8513/api/upload_file', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    store_period_key: spk,
-                    category: 'green1',
-                    filename: formattedFileName,
-                    file_data: base64Data
-                })
-            })
-            .then(r => r.json())
-            .then(resData => {
-                if (resData.success) {
-                    if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                    storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory'));
-                    storedFilesMap[spk]['green1'].push({ id: resData.id, filename: formattedFileName });
-
-                    const green1Chk = document.getElementById('green1-chk');
-                    if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
-
-                    renderStoredFiles();
-                    updateCompletionBadge();
-                    scheduleAutoSave();
-                }
-            })
-            .catch(err => {
-                console.error('Auto-upload error:', err);
-                scheduleAutoSave();
-            });
+            scheduleAutoSave();
         }
 
         function renderInventoryTable() {
@@ -1392,32 +1333,6 @@ html_code = """
                 localStorage.setItem('oz_data_' + spk, JSON.stringify(persistentStoreData[spk]));
             } catch(e) {}
 
-            fetch('http://127.0.0.1:8513/api/save_checklist', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    store_period_key: spk,
-                    cooh_text: notes['cooh'],
-                    prev_cooh: notes['prev_cooh'],
-                    brinks_total: notes['brinks_total'],
-                    cooh_date: dates['cooh'],
-                    chargebacks_text: notes['chargebacks'],
-                    checklist_json: checklistData
-                })
-            }).catch(err => console.error('Save checklist error:', err));
-
-            if (inv) {
-                fetch('http://127.0.0.1:8513/api/save_inventory', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        store_period_key: spk,
-                        inventory_json: { headers: inv.headers, rows: inv.rows },
-                        inventory_filename: inv.fileName
-                    })
-                }).catch(err => console.error('Save inventory error:', err));
-            }
-
             const badge = document.getElementById('store-completion-badge');
             if (badge) {
                 const checked = Object.values(checkboxes).filter(Boolean).length;
@@ -1467,34 +1382,11 @@ html_code = """
                 if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
                 if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
 
-                Array.from(inputElem.files).forEach((file, idx) => {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-                        fetch('http://127.0.0.1:8513/api/upload_file', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({
-                                store_period_key: spk,
-                                category: cat,
-                                filename: file.name,
-                                file_data: base64Data
-                            })
-                        })
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.success) {
-                                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-                                storedFilesMap[spk][cat].push({ id: data.id, filename: file.name });
-                                renderStoredFiles();
-                                scheduleAutoSave();
-                            }
-                        })
-                        .catch(err => console.error('Upload error:', err));
-                    };
-                    reader.readAsArrayBuffer(file);
+                Array.from(inputElem.files).forEach((file) => {
+                    storedFilesMap[spk][cat].push({ id: 'local_' + Date.now() + Math.random(), filename: file.name });
                 });
+                renderStoredFiles();
+                scheduleAutoSave();
                 inputElem.value = '';
             }
         }
@@ -1503,10 +1395,6 @@ html_code = """
             const spk = getSPK();
             if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
                 storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => f.id !== fileId);
-                if (Number.isInteger(fileId)) {
-                    fetch(`http://127.0.0.1:8513/api/delete_file?id=${fileId}`, { method: 'POST' })
-                        .catch(err => console.error('Delete error:', err));
-                }
                 renderStoredFiles();
                 scheduleAutoSave();
             }
@@ -1537,10 +1425,7 @@ html_code = """
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
                         let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
-                        if (Number.isInteger(f.id)) {
-                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">⬇</button>`;
-                        }
+                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
                         chip += `</span>`;
                         return chip;
                     }).join('');
@@ -1548,10 +1433,7 @@ html_code = """
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
                             let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
-                            if (Number.isInteger(f.id)) {
-                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">⬇</button>`;
-                            }
+                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
                             chip += `</span>`;
                             return chip;
                         }).join('');
