@@ -863,7 +863,7 @@ html_code = """
     </div>
 
     <script>
-        // ACCOUNTANT ORDER with spaced Vape Pods / Accessories layout and green header divider
+        // ACCOUNTANT ORDER with clean blank spacer row after Vapes - Pods and no totals at bottom
         const ACCOUNTANT_ORDER = [
             "Beverages", 
             "Dried Flower", 
@@ -1054,8 +1054,11 @@ html_code = """
         }
 
         function processParsedCSV(fields, data, fileName) {
+            // Filter out any incoming total rows or category children starting with '>'
             const parentRows = data.filter(row => {
                 const cat = row['Category'] || '';
+                const lowerCat = cat.trim().toLowerCase();
+                if (lowerCat.includes('total') || lowerCat.includes('sum')) return false;
                 return !cat.trim().startsWith('>');
             });
 
@@ -1146,7 +1149,7 @@ html_code = """
             tableBody.innerHTML = rows.map(row => {
                 const isSpacer = row['Category'] === "";
                 if (isSpacer) {
-                    return `<tr class="bg-emerald-800 text-white font-bold"><td colspan="${displayHeaders.length}" class="py-1.5 px-2 text-center text-xs tracking-wider bg-emerald-700 text-emerald-100">🌿 CATEGORY SEPARATOR 🌿</td></tr>`;
+                    return `<tr class="bg-zinc-50"><td colspan="${displayHeaders.length}" class="py-2 px-2 text-center text-xs text-zinc-300">&nbsp;</td></tr>`;
                 }
                 return `
                     <tr class="hover:bg-zinc-50 transition-colors">
