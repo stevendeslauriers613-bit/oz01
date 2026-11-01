@@ -82,11 +82,21 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, name TEXT, role TEXT, password TEXT)"
     )
     cursor.execute(
-        "CREATE TABLE IF NOT EXISTS store_data (store_period_key TEXT PRIMARY KEY, store TEXT, period TEXT, cooh_text TEXT, cooh_date TEXT, chargebacks_text TEXT, checklist_json TEXT, inventory_json TEXT, inventory_filename TEXT)"
+        "CREATE TABLE IF NOT EXISTS store_data (store_period_key TEXT PRIMARY KEY, store TEXT, period TEXT, cooh_text TEXT, cooh_date TEXT, brinks_total TEXT, prev_cooh TEXT, chargebacks_text TEXT, checklist_json TEXT, inventory_json TEXT, inventory_filename TEXT)"
     )
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS store_files (id INTEGER PRIMARY KEY AUTOINCREMENT, store_period_key TEXT, category TEXT, filename TEXT, filepath TEXT)"
     )
+
+    # Ensure columns exist if upgrading from older DB version
+    try:
+        cursor.execute("ALTER TABLE store_data ADD COLUMN brinks_total TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE store_data ADD COLUMN prev_cooh TEXT")
+    except Exception:
+        pass
 
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
@@ -110,7 +120,7 @@ def init_db():
 
 init_db()
 
-# --- HANDLE QUERY PARAMETER ACTIONS ---
+# --- BACKEND API ENDPOINTS FOR PERSISTENCE & UPLOADS ---
 query_params = st.query_params
 
 if "action" in query_params:
@@ -169,37 +179,6 @@ if "action" in query_params:
         conn.close()
         st.query_params.clear()
         st.rerun()
-
-    elif action == "download_file":
-        file_id = query_params.get("file_id")
-        if file_id:
-            cursor.execute("SELECT filename, filepath FROM store_files WHERE id = ?", (file_id,))
-            f_row = cursor.fetchone()
-            if f_row:
-                import mimetypes
-
-                filename = f_row[0]
-                filepath = f_row[1]
-                mime_type, _ = mimetypes.guess_type(filename)
-                if mime_type is None:
-                    mime_type = "application/octet-stream"
-
-                if filepath.startswith("dropbox://"):
-                    dbx = get_dropbox_client()
-                    if dbx:
-                        try:
-                            _, res = dbx.files_download(filepath.replace("dropbox://", ""))
-                            st.download_button(label=f"Download {filename}", data=res.content, file_name=filename,
-                                               mime=mime_type, key=f"dl_{file_id}")
-                            st.stop()
-                        except Exception:
-                            pass
-                elif os.path.exists(filepath):
-                    with open(filepath, "rb") as f:
-                        file_bytes = f.read()
-                    st.download_button(label=f"Download {filename}", data=file_bytes, file_name=filename,
-                                       mime=mime_type, key=f"dl_{file_id}")
-                    st.stop()
 
     conn.close()
     st.query_params.clear()
@@ -285,15 +264,17 @@ if db_files:
 
 # Fetch store data (checklist & inventory)
 cursor.execute(
-    "SELECT store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json, inventory_json, inventory_filename FROM store_data")
+    "SELECT store_period_key, cooh_text, cooh_date, brinks_total, prev_cooh, chargebacks_text, checklist_json, inventory_json, inventory_filename FROM store_data")
 db_store_data = cursor.fetchall()
 store_data_json = "{}"
 if db_store_data:
     sdj = {}
-    for spk, cooh_t, cooh_d, cb_t, chk_j, inv_j, inv_fname in db_store_data:
+    for spk, cooh_t, cooh_d, brinks_tot, prev_c, cb_t, chk_j, inv_j, inv_fname in db_store_data:
         sdj[spk] = {
             "cooh_text": cooh_t or "",
             "cooh_date": cooh_d or "",
+            "brinks_total": brinks_tot or "",
+            "prev_cooh": prev_c or "",
             "chargebacks_text": cb_t or "Nothing to report.",
             "checklist_json": json.loads(chk_j) if chk_j else {},
             "inventory_data": json.loads(inv_j) if inv_j else None,
@@ -336,7 +317,7 @@ add_user_btn_html = (
     else ""
 )
 
-# --- FULL HTML UI WITH EMBEDDED PERSISTENCE & AUTO-SUMMING FINANCIAL CALCULATOR ---
+# --- FULL HTML UI WITH PERSISTENCE, BRINKS, PREV COOH & INVENTORY FORMATTER ---
 html_code = """
 <!DOCTYPE html>
 <html lang="en">
@@ -535,23 +516,34 @@ html_code = """
 
                         <div class="space-y-3.5 max-h-[480px] overflow-y-auto pr-2" id="checklist-container">
 
-                            <!-- 1. Cash on Hand -->
-                            <div class="bg-white p-3 rounded-xl border border-zinc-200 space-y-2 shadow-xs">
-                                <div class="flex justify-between items-center">
-                                    <label class="block text-xs font-bold text-emerald-800">Cash On Hand - End of Day</label>
+                            <!-- 1. Cash on Hand & Brinks Reconciliation Inputs -->
+                            <div class="bg-white p-4 rounded-xl border border-zinc-200 space-y-3 shadow-xs">
+                                <div class="flex justify-between items-center border-b border-zinc-100 pb-2">
+                                    <label class="block text-xs font-bold text-emerald-800">Cash & Brinks Reconciliation Inputs</label>
                                     <input type="date" id="cooh-date" onchange="scheduleAutoSave()" class="bg-white text-zinc-700 text-[11px] px-2 py-1 rounded border border-zinc-300">
                                 </div>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    <input type="text" id="cooh-text" placeholder="Enter amount e.g. $24,521.10" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
-                                    <div class="flex flex-col gap-1">
-                                        <input type="file" id="cooh-file" multiple onchange="handleItemFiles('cooh', this)" class="hidden">
-                                        <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('cooh-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">📎 Browse & Upload Document</button>
-                                            <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
-                                        </div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div>
+                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Previous Month's End Cash</label>
+                                        <input type="text" id="prev-cooh" placeholder="$0.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Total Brinks Deposits</label>
+                                        <input type="text" id="brinks-total" placeholder="$0.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[11px] font-semibold text-zinc-700 mb-1">Current End Cash on Hand</label>
+                                        <input type="text" id="cooh-text" placeholder="$0.00" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs text-zinc-800">
                                     </div>
                                 </div>
-                                <div id="files-cooh" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
+                                <div class="flex items-center justify-between pt-1">
+                                    <div id="files-cooh" class="text-[11px] text-zinc-600">No files uploaded</div>
+                                    <div class="flex gap-1">
+                                        <input type="file" id="cooh-file" multiple onchange="handleItemFiles('cooh', this)" class="hidden">
+                                        <button type="button" onclick="document.getElementById('cooh-file').click()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-medium py-1 px-2.5 rounded border border-emerald-300">📎 Upload Cash Docs</button>
+                                        <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200">🗑️</button>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- 2. Brinks Book -->
@@ -865,7 +857,6 @@ html_code = """
     </div>
 
     <script>
-        // Exact 20 categories + 1 blank spacer row right after row 14 (Vapes - Pods)
         const ACCOUNTANT_ORDER = [
             "Beverages",
             "Dried Flower",
@@ -912,10 +903,6 @@ html_code = """
             return false;
         }
 
-        // Normalizes any raw or previously saved rows to guarantee:
-        // 1. No Total / Sum rows at the bottom
-        // 2. Exact ACCOUNTANT_ORDER sorting
-        // 3. A true empty row after row 14 ("Vapes - Pods") before "Accessories"
         function normalizeInventoryRows(fields, rawRows) {
             const validRows = (rawRows || []).filter(row => {
                 if (!row) return false;
@@ -956,7 +943,6 @@ html_code = """
             return sortedRows;
         }
 
-        // Builds a styled Excel Workbook matching Oz 7_October_2026_Formatted_Inventory.xlsx
         function buildFormattedWorkbook(headers, rows, sheetName) {
             const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
             const normalizedRows = normalizeInventoryRows(cleanHeaders, rows);
@@ -976,7 +962,6 @@ html_code = """
 
             const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-            // Style Row 1: Dark Green Header (#065F46) with Bold White Text
             const headerStyle = {
                 fill: { patternType: "solid", fgColor: { rgb: "065F46" } },
                 font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
@@ -1001,7 +986,6 @@ html_code = """
                 if (ws[cellRef]) ws[cellRef].s = headerStyle;
             }
 
-            // Style Data Rows & leave Row 15 (r = 14) completely blank
             for (let r = 1; r < aoa.length; r++) {
                 const isSpacer = aoa[r][0] === null || aoa[r][0] === "";
                 for (let c = 0; c < cleanHeaders.length; c++) {
@@ -1078,6 +1062,8 @@ html_code = """
             const spk = getSPK();
 
             document.getElementById('cooh-text').value = "";
+            document.getElementById('prev-cooh').value = "";
+            document.getElementById('brinks-total').value = "";
             document.getElementById('cooh-date').value = "";
             document.getElementById('brinks-date').value = "";
             document.getElementById('chargebacks-text').value = "Nothing to report.";
@@ -1103,6 +1089,8 @@ html_code = """
                     document.getElementById('cooh-text').value = data.cooh_text;
                     syncNotes('cooh', data.cooh_text);
                 }
+                if(data.prev_cooh !== undefined) document.getElementById('prev-cooh').value = data.prev_cooh;
+                if(data.brinks_total !== undefined) document.getElementById('brinks-total').value = data.brinks_total;
                 if(data.cooh_date) document.getElementById('cooh-date').value = data.cooh_date;
                 if(data.chargebacks_text) {
                     document.getElementById('chargebacks-text').value = data.chargebacks_text;
@@ -1201,7 +1189,6 @@ html_code = """
             showCSVFileInfo(fileName);
             updateFinancialSummary();
 
-            // Generate styled Excel (.xlsx) and push to Greenline Inventory Summary
             const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
             const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
@@ -1355,6 +1342,8 @@ html_code = """
 
             const notes = {
                 'cooh': document.getElementById('cooh-text')?.value || '',
+                'prev_cooh': document.getElementById('prev-cooh')?.value || '',
+                'brinks_total': document.getElementById('brinks-total')?.value || '',
                 'brinks': document.getElementById('brinks-note')?.value || '',
                 'green1': document.getElementById('green1-note')?.value || '',
                 'green2': document.getElementById('green2-note')?.value || '',
@@ -1391,6 +1380,8 @@ html_code = """
 
             persistentStoreData[spk] = {
                 cooh_text: notes['cooh'],
+                prev_cooh: notes['prev_cooh'],
+                brinks_total: notes['brinks_total'],
                 cooh_date: dates['cooh'],
                 chargebacks_text: notes['chargebacks'],
                 checklist_json: checklistData,
@@ -1408,6 +1399,8 @@ html_code = """
                 body: JSON.stringify({
                     store_period_key: spk,
                     cooh_text: notes['cooh'],
+                    prev_cooh: notes['prev_cooh'],
+                    brinks_total: notes['brinks_total'],
                     cooh_date: dates['cooh'],
                     chargebacks_text: notes['chargebacks'],
                     checklist_json: checklistData
@@ -1664,12 +1657,8 @@ html_code = """
                     });
                 }
 
-                if (totalSales === 0) {
-                    totalSales = 143109.68;
-                }
-                if (totalCogs === 0) {
-                    totalCogs = totalSales * 0.80;
-                }
+                if (totalSales === 0) totalSales = 143109.68;
+                if (totalCogs === 0) totalCogs = totalSales * 0.80;
 
                 const parseNum = (id) => {
                     const el = document.getElementById(id);
