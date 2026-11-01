@@ -45,40 +45,42 @@ def ensure_dropbox_folder(dbx):
 
 
 def sync_from_dropbox_on_startup():
-    """Automatically check Dropbox and sync master state/files on app boot."""
+    """Automatically download and restore master store state from Dropbox on app boot."""
     try:
         dbx = get_dropbox_client()
         if not dbx:
             return
         ensure_dropbox_folder(dbx)
         
-        # Pull master store state if present
-        try:
-            metadata, res = dbx.files_download(f"{DROPBOX_FOLDER_PATH}/master_store_state.json")
-            state_data = json.loads(res.content.decode('utf-8'))
-            # Auto-save remote state into local SQLite database if needed
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            for spk, val in state_data.items():
-                cursor.execute(
-                    "INSERT OR REPLACE INTO store_data (store_period_key, cooh_text, prev_cooh, brinks_total, chargebacks_text, checklist_json, inventory_json, inventory_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        spk,
-                        val.get("cooh_text", ""),
-                        val.get("prev_cooh", ""),
-                        val.get("brinks_total", ""),
-                        val.get("chargebacks_text", "Nothing to report."),
-                        json.dumps(val.get("checklist_json", {})),
-                        json.dumps(val.get("inventory_data")) if val.get("inventory_data") else None,
-                        val.get("inventory_filename", "")
-                    )
+        # Download master_store_state.json from Dropbox
+        _, res = dbx.files_download(f"{DROPBOX_FOLDER_PATH}/master_store_state.json")
+        state_data = json.loads(res.content.decode('utf-8'))
+        
+        # Populate the local SQLite database so all saved records appear immediately
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        for spk, val in state_data.items():
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO store_data 
+                (store_period_key, cooh_text, prev_cooh, brinks_total, chargebacks_text, checklist_json, inventory_json, inventory_filename) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    spk,
+                    val.get("cooh_text", ""),
+                    val.get("prev_cooh", ""),
+                    val.get("brinks_total", ""),
+                    val.get("chargebacks_text", "Nothing to report."),
+                    json.dumps(val.get("checklist_json", {})),
+                    json.dumps(val.get("inventory_data")) if val.get("inventory_data") else None,
+                    val.get("inventory_filename", "")
                 )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            pass
+            )
+        conn.commit()
+        conn.close()
     except Exception as e:
-        print("Dropbox startup sync error:", e)
+        print("Startup sync skipped or file not found yet:", e)
 
 
 # Set page configuration
@@ -149,7 +151,7 @@ def init_db():
 
 init_db()
 
-# Run automatic Dropbox cloud sync on every application boot
+# Run automatic Dropbox cloud sync & restore on app boot
 sync_from_dropbox_on_startup()
 
 # --- HANDLE ACTIONS ---
