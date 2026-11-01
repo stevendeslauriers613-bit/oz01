@@ -920,7 +920,7 @@ html_code = """
                 const cat = String(row['Category'] !== undefined && row['Category'] !== null ? row['Category'] : '').trim();
                 if (!cat || cat.startsWith('>') || cat.startsWith('---')) return false;
                 const lower = cat.toLowerCase();
-                if (lower === 'total' || lower === 'totals' || lower.startsWith('total ') || lower.includes('grand total')) return false;
+                if (lower === 'total' || lower === 'totals' || lower.startsWith('total ') || lower.includes('grand total') || lower.includes('sum') || lower.includes('subtotal')) return false;
                 return true;
             });
 
@@ -962,7 +962,7 @@ html_code = """
             const aoa = [cleanHeaders];
             normalizedRows.forEach(row => {
                 if (isBlankSpacerRow(row)) {
-                    aoa.push(cleanHeaders.map(() => null));
+                    aoa.push([]);  // completely empty row for true blank
                 } else {
                     aoa.push(cleanHeaders.map(h => {
                         if (h === 'Category') return row[h];
@@ -974,16 +974,13 @@ html_code = """
 
             const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-            // Style Row 1: Dark Green Header (#065F46) with Bold White Text
+            // Style Row 1: Nice dark emerald green header matching the sample
             const headerStyle = {
                 fill: { patternType: "solid", fgColor: { rgb: "065F46" } },
-                font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
-                alignment: { horizontal: "center", vertical: "center" },
+                font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+                alignment: { horizontal: "center", vertical: "center", wrapText: true },
                 border: {
-                    top: { style: "thin", color: { rgb: "047857" } },
-                    bottom: { style: "thin", color: { rgb: "047857" } },
-                    left: { style: "thin", color: { rgb: "047857" } },
-                    right: { style: "thin", color: { rgb: "047857" } }
+                    bottom: { style: "thin", color: { rgb: "047857" } }
                 }
             };
 
@@ -1001,11 +998,12 @@ html_code = """
 
             // Style Data Rows & leave Row 15 (r = 14) completely blank
             for (let r = 1; r < aoa.length; r++) {
-                const isSpacer = aoa[r][0] === null || aoa[r][0] === "";
+                const isSpacer = !aoa[r] || aoa[r].length === 0 || aoa[r][0] === null || aoa[r][0] === "";
                 for (let c = 0; c < cleanHeaders.length; c++) {
                     const cellRef = XLSX.utils.encode_cell({ r: r, c: c });
                     if (isSpacer) {
-                        ws[cellRef] = { t: "s", v: "" };
+                        // Leave cell undefined for a true blank row
+                        if (ws[cellRef]) delete ws[cellRef];
                     } else if (ws[cellRef]) {
                         if (c === 0) {
                             ws[cellRef].s = {
@@ -1015,11 +1013,11 @@ html_code = """
                             };
                         } else {
                             ws[cellRef].t = "n";
-                            ws[cellRef].z = "#,##0.00";
+                            ws[cellRef].z = "#,##0.00;[Red]-#,##0.00";
                             ws[cellRef].s = {
-                                font: { name: "Calibri", sz: 11, color: { rgb: "18181B" } },
+                                font: { name: "Arial", sz: 10, color: { rgb: "18181B" } },
                                 alignment: { horizontal: "right", vertical: "center" },
-                                numFmt: "#,##0.00",
+                                numFmt: "#,##0.00;[Red]-#,##0.00",
                                 border: dataBorder
                             };
                         }
@@ -1028,6 +1026,7 @@ html_code = """
             }
 
             ws['!cols'] = cleanHeaders.map((h, i) => ({ wch: i === 0 ? 24 : 14 }));
+            ws['!rows'] = [{ hpt: 22 }];  // taller header row for a cleaner look
 
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, sheetName);
@@ -1662,11 +1661,12 @@ html_code = """
                     });
                 }
 
+                // Do not invent numbers; show zero if no inventory data
                 if (totalSales === 0) {
-                    totalSales = 143109.68;
+                    totalSales = 0;
                 }
                 if (totalCogs === 0) {
-                    totalCogs = totalSales * 0.80;
+                    totalCogs = 0;
                 }
 
                 const parseNum = (id) => {
