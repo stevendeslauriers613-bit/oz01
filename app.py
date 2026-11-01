@@ -956,6 +956,7 @@ html_code = """
 
             const aoa = [cleanHeaders];
             let spacerInserted = false;
+
             normalizedRows.forEach(row => {
                 if (isBlankSpacerRow(row)) {
                     aoa.push(new Array(cleanHeaders.length).fill(""));
@@ -989,9 +990,7 @@ html_code = """
 
             for (let c = 0; c <= lastCol; c++) {
                 const cellRef = XLSX.utils.encode_cell({ r: 0, c: c });
-                if (!ws[cellRef]) {
-                    ws[cellRef] = { t: "s", v: cleanHeaders[c] || "" };
-                }
+                if (!ws[cellRef]) ws[cellRef] = { t: "s", v: cleanHeaders[c] || "" };
                 ws[cellRef].s = headerStyle;
             }
 
