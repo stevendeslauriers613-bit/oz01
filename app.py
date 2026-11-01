@@ -959,13 +959,14 @@ html_code = """
             const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
             const normalizedRows = normalizeInventoryRows(cleanHeaders, rows);
 
+            // Build array-of-arrays. Spacer is a full row of empty strings so the row is never dropped.
             const aoa = [cleanHeaders];
             normalizedRows.forEach(row => {
                 if (isBlankSpacerRow(row)) {
-                    aoa.push([]);  // completely empty row for true blank
+                    aoa.push(cleanHeaders.map(() => ""));
                 } else {
                     aoa.push(cleanHeaders.map(h => {
-                        if (h === 'Category') return row[h];
+                        if (h === 'Category') return row[h] || "";
                         const num = parseFloat(String(row[h] !== undefined && row[h] !== null ? row[h] : 0).replace(/[^0-9.-]/g, ''));
                         return isNaN(num) ? 0 : num;
                     }));
@@ -974,14 +975,17 @@ html_code = """
 
             const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-            // Style Row 1: Nice dark emerald green header matching the sample
+            // Force the sheet range to include every row (including the blank spacer)
+            const range = XLSX.utils.decode_range(ws['!ref'] || "A1");
+            range.e.r = Math.max(range.e.r, aoa.length - 1);
+            range.e.c = Math.max(range.e.c, cleanHeaders.length - 1);
+            ws['!ref'] = XLSX.utils.encode_range(range);
+
+            // Dark emerald green header – style format that xlsx-js-style reliably writes
             const headerStyle = {
                 fill: { patternType: "solid", fgColor: { rgb: "065F46" } },
                 font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
-                alignment: { horizontal: "center", vertical: "center", wrapText: true },
-                border: {
-                    bottom: { style: "thin", color: { rgb: "047857" } }
-                }
+                alignment: { horizontal: "center", vertical: "center", wrapText: true }
             };
 
             const dataBorder = {
@@ -991,23 +995,25 @@ html_code = """
                 right: { style: "thin", color: { rgb: "D4D4D8" } }
             };
 
+            // Apply header style to row 0
             for (let c = 0; c < cleanHeaders.length; c++) {
                 const cellRef = XLSX.utils.encode_cell({ r: 0, c: c });
-                if (ws[cellRef]) ws[cellRef].s = headerStyle;
+                if (!ws[cellRef]) ws[cellRef] = { t: "s", v: cleanHeaders[c] };
+                ws[cellRef].s = headerStyle;
             }
 
-            // Style Data Rows & leave Row 15 (r = 14) completely blank
+            // Style data rows; leave the spacer row completely empty (clear any cells)
             for (let r = 1; r < aoa.length; r++) {
-                const isSpacer = !aoa[r] || aoa[r].length === 0 || aoa[r][0] === null || aoa[r][0] === "";
+                const isSpacer = !aoa[r] || aoa[r].every(v => v === "" || v === null || v === undefined);
                 for (let c = 0; c < cleanHeaders.length; c++) {
                     const cellRef = XLSX.utils.encode_cell({ r: r, c: c });
                     if (isSpacer) {
-                        // Leave cell undefined for a true blank row
+                        // Remove the cell so the row appears truly blank
                         if (ws[cellRef]) delete ws[cellRef];
                     } else if (ws[cellRef]) {
                         if (c === 0) {
                             ws[cellRef].s = {
-                                font: { name: "Calibri", sz: 11, color: { rgb: "18181B" } },
+                                font: { name: "Arial", sz: 10, color: { rgb: "18181B" } },
                                 alignment: { horizontal: "left", vertical: "center" },
                                 border: dataBorder
                             };
@@ -1026,10 +1032,11 @@ html_code = """
             }
 
             ws['!cols'] = cleanHeaders.map((h, i) => ({ wch: i === 0 ? 24 : 14 }));
-            ws['!rows'] = [{ hpt: 22 }];  // taller header row for a cleaner look
+            // Make header row a bit taller; spacer row stays normal height
+            ws['!rows'] = [{ hpt: 22 }];
 
             const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+            XLSX.utils.book_append_sheet(wb, ws, sheetName || "Inventory");
             return wb;
         }
 
@@ -1201,7 +1208,7 @@ html_code = """
             // Generate styled Excel (.xlsx) and push to Greenline Inventory Summary
             const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
-            const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+            const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64', cellStyles: true });
 
             fetch('http://127.0.0.1:8513/api/upload_file', {
                 method: 'POST',
@@ -1290,7 +1297,7 @@ html_code = """
 
             document.getElementById('download-excel-btn').onclick = function() {
                 const wb = buildFormattedWorkbook(headers, rows, `${activeStore} Inventory`);
-                XLSX.writeFile(wb, `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`);
+                XLSX.writeFile(wb, `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`, { cellStyles: true });
             };
             updateFinancialSummary();
         }
