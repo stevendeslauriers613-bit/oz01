@@ -910,10 +910,6 @@ html_code = """
             return false;
         }
 
-        // Normalizes any raw or previously saved rows to guarantee:
-        // 1. No Total / Sum rows at the bottom
-        // 2. Exact ACCOUNTANT_ORDER sorting
-        // 3. A true empty row after row 14 ("Vapes - Pods") before "Accessories"
         function normalizeInventoryRows(fields, rawRows) {
             const validRows = (rawRows || []).filter(row => {
                 if (!row) return false;
@@ -954,17 +950,14 @@ html_code = """
             return sortedRows;
         }
 
-        // Builds a styled Excel Workbook matching Oz 7_October_2026_Formatted_Inventory.xlsx
         function buildFormattedWorkbook(headers, rows, sheetName) {
             const cleanHeaders = (headers || []).filter(h => h && String(h).trim() !== '');
             const normalizedRows = normalizeInventoryRows(cleanHeaders, rows);
 
-            // Hard-force the exact layout: 13 categories, blank, then the rest
             const aoa = [cleanHeaders];
             let spacerInserted = false;
             normalizedRows.forEach(row => {
                 if (isBlankSpacerRow(row)) {
-                    // Force a full blank row of empty strings
                     aoa.push(new Array(cleanHeaders.length).fill(""));
                     spacerInserted = true;
                 } else {
@@ -976,7 +969,6 @@ html_code = """
                 }
             });
 
-            // Safety: if spacer was somehow missed, insert it after Vapes - Pods
             if (!spacerInserted) {
                 const podsIndex = aoa.findIndex(r => String(r[0] || "").trim().toLowerCase() === "vapes - pods");
                 if (podsIndex > 0) {
@@ -985,13 +977,10 @@ html_code = """
             }
 
             const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-            // Guarantee the range covers the blank row
             const lastRow = aoa.length - 1;
             const lastCol = cleanHeaders.length - 1;
             ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: lastCol } });
 
-            // Green header – simplest style object that xlsx-js-style accepts
             const headerStyle = {
                 fill: { patternType: "solid", fgColor: { rgb: "FF065F46" } },
                 font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFFFF" } },
@@ -1006,7 +995,6 @@ html_code = """
                 ws[cellRef].s = headerStyle;
             }
 
-            // Clear every cell on the spacer row so it stays blank
             for (let r = 1; r <= lastRow; r++) {
                 const isSpacer = !aoa[r] || aoa[r].every(v => v === "" || v === null || v === undefined);
                 for (let c = 0; c <= lastCol; c++) {
@@ -1193,7 +1181,6 @@ html_code = """
             showCSVFileInfo(fileName);
             updateFinancialSummary();
 
-            // Generate styled Excel (.xlsx) and push to Greenline Inventory Summary
             const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
             const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64', cellStyles: true, bookSST: false });
@@ -1656,13 +1643,8 @@ html_code = """
                     });
                 }
 
-                // Do not invent numbers; show zero if no inventory data
-                if (totalSales === 0) {
-                    totalSales = 0;
-                }
-                if (totalCogs === 0) {
-                    totalCogs = 0;
-                }
+                if (totalSales === 0) totalSales = 0;
+                if (totalCogs === 0) totalCogs = 0;
 
                 const parseNum = (id) => {
                     const el = document.getElementById(id);
