@@ -1016,28 +1016,33 @@ html_code = """
             updateCompletionBadge();
         }
 
-        async function uploadToDropboxAndRegister(spk, cat, file) {
+        async function uploadToDropboxAndRegister(spk, cat, file, silent) {
             if (!DROPBOX_TOKEN) {
-                alert('Dropbox is not connected on the server. Use the Upload to Dropbox box above the checklist, after the Dropbox secrets are set.');
+                if (!silent) alert('Saved in this checklist. Dropbox is not connected, so it will not appear on other devices until Dropbox secrets are set. Use the upload box above the app.');
                 return;
             }
             const safeName = file.name.replace(/[\\/]/g, '_');
             const path = `${DROPBOX_FOLDER}/files/${spk}/${cat}/${safeName}`;
-            const res = await fetch('https://content.dropboxapi.com/2/files/upload', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + DROPBOX_TOKEN,
-                    'Content-Type': 'application/octet-stream',
-                    'Dropbox-API-Arg': JSON.stringify({ path: path, mode: 'overwrite', autorename: false, mute: true })
-                },
-                body: file
-            });
-            if (!res.ok) {
-                const err = await res.text();
-                alert('Dropbox upload failed: ' + err);
+            try {
+                const res = await fetch('https://content.dropboxapi.com/2/files/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + DROPBOX_TOKEN,
+                        'Content-Type': 'application/octet-stream',
+                        'Dropbox-API-Arg': JSON.stringify({ path: path, mode: 'overwrite', autorename: false, mute: true })
+                    },
+                    body: file
+                });
+                if (!res.ok) {
+                    const err = await res.text();
+                    if (!silent) alert('Dropbox upload failed: ' + err);
+                    return;
+                }
+            } catch (err) {
+                if (!silent) alert('Dropbox upload failed: ' + err);
                 return;
             }
-            const target = window.top && window.top.location ? window.top : window;
+            const target = (window.top && window.top !== window) ? window.top : window;
             const url = new URL(target.location.href);
             url.searchParams.set('action', 'register_file');
             url.searchParams.set('spk', spk);
@@ -1286,7 +1291,11 @@ html_code = """
             const fileInput = document.getElementById('file-input');
             if(!dropZone || !fileInput) return;
 
-            dropZone.onclick = () => fileInput.click();
+            dropZone.onclick = (e) => {
+                if (e.target === fileInput) return;
+                fileInput.click();
+            };
+            fileInput.onclick = (e) => e.stopPropagation();
             dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-emerald-600', 'bg-emerald-50/50'); };
             dropZone.ondragleave = () => dropZone.classList.remove('border-emerald-600', 'bg-emerald-50/50');
             dropZone.ondrop = (e) => {
@@ -1343,12 +1352,19 @@ html_code = """
 
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
             const csvContent = Papa.unparse(sortedRows);
-            const formattedFile = new File([csvContent], formattedFileName, { type: 'text/csv' });
-            uploadToDropboxAndRegister(spk, 'green1', formattedFile);
+            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+            if (!storedFilesMap[spk]['green1']) storedFilesMap[spk]['green1'] = [];
+            storedFilesMap[spk]['green1'] = storedFilesMap[spk]['green1'].filter(f => !String(f.filename).includes('_Formatted_Inventory'));
+            storedFilesMap[spk]['green1'].push({ id: 'formatted-' + Date.now(), filename: formattedFileName });
+            renderStoredFiles();
+
             const green1Chk = document.getElementById('green1-chk');
-            if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
+            if (green1Chk) green1Chk.checked = true;
             updateCompletionBadge();
             scheduleAutoSave();
+
+            const formattedFile = new File([csvContent], formattedFileName, { type: 'text/csv' });
+            uploadToDropboxAndRegister(spk, 'green1', formattedFile, true);
         }
 
         function renderInventoryTable() {
@@ -1573,7 +1589,13 @@ html_code = """
             if (!inputElem.files || !inputElem.files.length) return;
             const spk = getSPK();
             markChecklistItem(cat);
-            Array.from(inputElem.files).forEach((file) => uploadToDropboxAndRegister(spk, cat, file));
+            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+            if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+            Array.from(inputElem.files).forEach((file) => {
+                storedFilesMap[spk][cat].push({ id: 'pending-' + Date.now() + '-' + file.name, filename: file.name });
+                renderStoredFiles();
+                uploadToDropboxAndRegister(spk, cat, file, false);
+            });
             inputElem.value = '';
         }
 
@@ -1956,8 +1978,10 @@ final_html = (
     .replace("REPLACE_DROPBOX_FOLDER", DROPBOX_FOLDER_PATH)
 )
 
-st.markdown("### Upload to Dropbox")
-st.caption("This saves on the server, so the file shows on every device. The checklist buttons below use the same Dropbox account.")
+st.markdown("### Upload documents")
+st.caption("Drop the inventory CSV here to format it and put it in Inventory Summary. Other files go in the folder you pick.")
+
+inv_file = st.file_uploader("Inventory CSV for the formatter", type=["csv"], key="inv_csv")
 up_cols = st.columns([1.2, 1, 1, 1.6, 2])
 with up_cols[0]:
     up_store = st.selectbox("Store", ["Oz 1", "Oz 2", "Oz 3", "Oz 4", "Oz 5", "Oz 6", "Oz 7"], key="up_store")
@@ -1983,34 +2007,95 @@ with up_cols[3]:
 with up_cols[4]:
     uploaded = st.file_uploader("File", key="period_file")
 
-if uploaded is not None and dropbox_token:
-    spk = f"{up_store}_{up_month}_{up_year}"
-    safe_name = uploaded.name.replace("/", "_").replace("\\", "_")
-    dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{up_cat[1]}/{safe_name}"
-    try:
-        dropbox_upload(dropbox_token, dropbox_path, uploaded.getvalue())
-        conn = sqlite3.connect(DB_FILE)
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id FROM store_files WHERE store_period_key = ? AND category = ? AND filename = ?",
-            (spk, up_cat[1], safe_name),
-        )
-        existing = cur.fetchone()
+spk = f"{up_store}_{up_month}_{up_year}"
+
+
+def save_uploaded_file(spk, category, filename, data):
+    safe_name = filename.replace("/", "_").replace("\\", "_")
+    if dropbox_token:
+        dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{category}/{safe_name}"
+        dropbox_upload(dropbox_token, dropbox_path, data)
         filepath = f"dropbox://{dropbox_path}"
-        if existing:
-            cur.execute("UPDATE store_files SET filepath = ? WHERE id = ?", (filepath, existing[0]))
-        else:
-            cur.execute(
-                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
-                (spk, up_cat[1], safe_name, filepath),
-            )
-        conn.commit()
-        conn.close()
-        st.success(f"Saved {safe_name} to Dropbox for {spk}.")
+    else:
+        folder = os.path.join(UPLOAD_DIR, spk, category)
+        os.makedirs(folder, exist_ok=True)
+        filepath = os.path.join(folder, safe_name)
+        with open(filepath, "wb") as f:
+            f.write(data)
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM store_files WHERE store_period_key = ? AND category = ? AND filename = ?",
+        (spk, category, safe_name),
+    )
+    existing = cur.fetchone()
+    if existing:
+        cur.execute("UPDATE store_files SET filepath = ? WHERE id = ?", (filepath, existing[0]))
+    else:
+        cur.execute(
+            "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+            (spk, category, safe_name, filepath),
+        )
+    conn.commit()
+    conn.close()
+    return safe_name
+
+
+def save_inventory_from_csv(spk, filename, data):
+    frame = pd.read_csv(io.BytesIO(data))
+    frame = frame.fillna("")
+    headers = [str(c) for c in frame.columns]
+    rows = frame.to_dict(orient="records")
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT cooh_text, cooh_date, chargebacks_text, checklist_json FROM store_data WHERE store_period_key = ?", (spk,))
+    existing = cur.fetchone()
+    checklist = existing[3] if existing and existing[3] else "{}"
+    try:
+        chk = json.loads(checklist) if checklist else {}
+    except Exception:
+        chk = {}
+    chk.setdefault("checkboxes", {})
+    chk["checkboxes"]["green1"] = True
+    cur.execute(
+        """INSERT OR REPLACE INTO store_data
+           (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json, inventory_json, inventory_filename)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            spk,
+            existing[0] if existing else "",
+            existing[1] if existing else "",
+            existing[2] if existing else "Nothing to report.",
+            json.dumps(chk),
+            json.dumps({"headers": headers, "rows": rows}),
+            filename,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+if inv_file is not None:
+    try:
+        raw = inv_file.getvalue()
+        save_uploaded_file(spk, "green1", inv_file.name, raw)
+        formatted_name = f"{up_store}_{up_month}_{up_year}_Formatted_Inventory.csv"
+        save_uploaded_file(spk, "green1", formatted_name, raw)
+        save_inventory_from_csv(spk, inv_file.name, raw)
+        st.success(f"Formatted {inv_file.name} and added it to Inventory Summary for {spk}.")
         st.rerun()
     except Exception as exc:
-        st.error(f"Dropbox upload failed: {exc}")
-elif uploaded is not None and not dropbox_token:
-    st.error("Dropbox is not connected. Add app_key, app_secret, and refresh_token to Streamlit secrets under [dropbox].")
+        st.error(f"Inventory upload failed: {exc}")
+
+if uploaded is not None:
+    try:
+        save_uploaded_file(spk, up_cat[1], uploaded.name, uploaded.getvalue())
+        if up_cat[1] == "green1" and uploaded.name.lower().endswith(".csv"):
+            save_inventory_from_csv(spk, uploaded.name, uploaded.getvalue())
+        where = "Dropbox and the checklist" if dropbox_token else "the checklist"
+        st.success(f"Saved {uploaded.name} to {where} for {spk}.")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Upload failed: {exc}")
 
 components.html(final_html, height=3000, scrolling=True)
