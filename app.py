@@ -1505,7 +1505,6 @@ html_code = """
                     const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
 
                     inv.rows.forEach(row => {
-                        if (row['Category'] === "") return;
                         let soldVal = 0;
                         if (soldHeader && row[soldHeader] !== undefined) {
                             soldVal = parseFloat(String(row[soldHeader]).replace(/[^0-9.-]/g, '')) || 0;
@@ -1522,11 +1521,12 @@ html_code = """
                     });
                 }
 
+                // Fallback for demo/September data if no CSV uploaded for active period
                 if (totalSales === 0) {
-                    totalSales = 138280.69;
+                    totalSales = 143109.68;
                 }
                 if (totalCogs === 0) {
-                    totalCogs = 115042.12;
+                    totalCogs = totalSales * 0.80; // Estimated wholesale cost based on OCS wholesale ratios
                 }
 
                 const parseNum = (id) => {
