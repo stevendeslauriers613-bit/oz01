@@ -6,10 +6,13 @@ import os
 import sqlite3
 import uuid
 import zipfile
+import threading
 from datetime import datetime
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
@@ -175,6 +178,139 @@ def sync_dropbox_files_to_db():
 
 # Run sync on startup so existing Dropbox files (including September Oz 1 & Oz 7) appear in the app
 sync_dropbox_files_to_db()
+
+# --- LOCAL FLASK API FOR RELIABLE UPLOADS & SAVES (port 8513) ---
+api_app = Flask(__name__)
+CORS(api_app)
+
+@api_app.route("/api/upload_file", methods=["POST"])
+def api_upload_file():
+    try:
+        data = request.get_json()
+        spk = data.get("store_period_key", "")
+        category = data.get("category", "")
+        filename = data.get("filename", "")
+        file_b64 = data.get("file_data", "")
+        if not (spk and filename and file_b64):
+            return jsonify({"success": False, "error": "missing fields"}), 400
+
+        file_bytes = base64.b64decode(file_b64)
+        dbx = get_dropbox_client()
+        filepath = ""
+        if dbx:
+            ensure_dropbox_folder(dbx)
+            filepath = upload_to_dropbox(dbx, filename, file_bytes, category, spk) or ""
+
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+            (spk, category, filename, filepath)
+        )
+        file_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True, "id": file_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_app.route("/api/save_checklist", methods=["POST"])
+def api_save_checklist():
+    try:
+        data = request.get_json()
+        spk = data.get("store_period_key", "")
+        if not spk:
+            return jsonify({"success": False, "error": "missing spk"}), 400
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT OR REPLACE INTO store_data 
+               (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (spk, data.get("cooh_text", ""), data.get("cooh_date", ""),
+             data.get("chargebacks_text", "Nothing to report."),
+             json.dumps(data.get("checklist_json", {})))
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_app.route("/api/save_inventory", methods=["POST"])
+def api_save_inventory():
+    try:
+        data = request.get_json()
+        spk = data.get("store_period_key", "")
+        if not spk:
+            return jsonify({"success": False, "error": "missing spk"}), 400
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT OR REPLACE INTO store_data 
+               (store_period_key, inventory_json, inventory_filename) 
+               VALUES (?, ?, ?)""",
+            (spk, json.dumps(data.get("inventory_json", {})), data.get("inventory_filename", ""))
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_app.route("/api/delete_file", methods=["POST"])
+def api_delete_file():
+    try:
+        file_id = request.args.get("id") or request.get_json().get("id")
+        if not file_id:
+            return jsonify({"success": False, "error": "missing id"}), 400
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT filepath FROM store_files WHERE id = ?", (file_id,))
+        row = cursor.fetchone()
+        if row and row[0] and row[0].startswith("dropbox://"):
+            dbx = get_dropbox_client()
+            if dbx:
+                try:
+                    dbx.files_delete_v2(row[0].replace("dropbox://", ""))
+                except Exception:
+                    pass
+        cursor.execute("DELETE FROM store_files WHERE id = ?", (file_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@api_app.route("/api/download_file")
+def api_download_file():
+    try:
+        file_id = request.args.get("id")
+        if not file_id:
+            return "missing id", 400
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT filename, filepath FROM store_files WHERE id = ?", (file_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return "not found", 404
+        filename, filepath = row
+        if filepath and filepath.startswith("dropbox://"):
+            dbx = get_dropbox_client()
+            if dbx:
+                _, res = dbx.files_download(filepath.replace("dropbox://", ""))
+                return send_file(io.BytesIO(res.content), download_name=filename, as_attachment=True)
+        return "file not available", 404
+    except Exception as e:
+        return str(e), 500
+
+def run_flask():
+    api_app.run(host="127.0.0.1", port=8513, debug=False, use_reloader=False)
+
+# Start Flask API in background thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
 
 # --- HANDLE QUERY PARAMETER ACTIONS ---
 query_params = st.query_params
@@ -1035,28 +1171,31 @@ html_code = """
             const csvContent = Papa.unparse(sortedRows);
             const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
 
-            // Trigger a real save of the formatted CSV via the backend
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_file');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('category', 'green1');
-            currentUrl.searchParams.set('filename', formattedFileName);
-            currentUrl.searchParams.set('file_b64', base64Data);
-            window.location.href = currentUrl.toString();
-
-            // Local UI update (will be refreshed after the navigation)
-            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-            storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory.csv'));
-            storedFilesMap[spk]['green1'].push({ id: 'auto_' + Date.now(), filename: formattedFileName });
-
-            const green1Chk = document.getElementById('green1-chk');
-            if (green1Chk && !green1Chk.checked) {
-                green1Chk.checked = true;
-            }
-
-            renderStoredFiles();
-            updateCompletionBadge();
-            // scheduleAutoSave will happen after the page reloads with the new file
+            // Upload formatted CSV via local Flask API (reliable for any size)
+            fetch('http://127.0.0.1:8513/api/upload_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    store_period_key: spk,
+                    category: 'green1',
+                    filename: formattedFileName,
+                    file_data: base64Data
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                    storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory.csv'));
+                    storedFilesMap[spk]['green1'].push({ id: data.id, filename: formattedFileName });
+                    const green1Chk = document.getElementById('green1-chk');
+                    if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
+                    renderStoredFiles();
+                    updateCompletionBadge();
+                    scheduleAutoSave();
+                }
+            })
+            .catch(err => console.error('Formatted inventory upload error:', err));
         }
 
         function renderInventoryTable() {
@@ -1205,19 +1344,30 @@ html_code = """
                 }, 2000);
             }
 
-            // Actually navigate so the Streamlit backend processes the save
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_checklist');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('cooh_text', notes['cooh']);
-            currentUrl.searchParams.set('cooh_date', dates['cooh']);
-            currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
-            currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
-            if (inventoryJson) {
-                currentUrl.searchParams.set('inventory_json', inventoryJson);
-                currentUrl.searchParams.set('inventory_filename', inventoryFilename);
+            // Save via local Flask API (reliable, no page reload)
+            fetch('http://127.0.0.1:8513/api/save_checklist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    store_period_key: spk,
+                    cooh_text: notes['cooh'],
+                    cooh_date: dates['cooh'],
+                    chargebacks_text: notes['chargebacks'],
+                    checklist_json: checklistData
+                })
+            }).catch(err => console.error('Save checklist error:', err));
+
+            if (inv) {
+                fetch('http://127.0.0.1:8513/api/save_inventory', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        store_period_key: spk,
+                        inventory_json: { headers: inv.headers, rows: inv.rows },
+                        inventory_filename: inv.fileName
+                    })
+                }).catch(err => console.error('Save inventory error:', err));
             }
-            window.location.href = currentUrl.toString();
         }
 
         function updateCompletionBadge() {
@@ -1259,16 +1409,34 @@ html_code = """
                 Array.from(inputElem.files).forEach((file) => {
                     const reader = new FileReader();
                     reader.onload = function(e) {
-                        const arrayBuffer = e.target.result;
-                        const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-                        
-                        const currentUrl = new URL(window.location.href);
-                        currentUrl.searchParams.set('action', 'save_file');
-                        currentUrl.searchParams.set('spk', spk);
-                        currentUrl.searchParams.set('category', cat);
-                        currentUrl.searchParams.set('filename', file.name);
-                        currentUrl.searchParams.set('file_b64', base64String);
-                        window.location.href = currentUrl.toString();
+                        const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
+                        fetch('http://127.0.0.1:8513/api/upload_file', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                store_period_key: spk,
+                                category: cat,
+                                filename: file.name,
+                                file_data: base64String
+                            })
+                        })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success) {
+                                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+                                storedFilesMap[spk][cat].push({ id: data.id, filename: file.name });
+                                renderStoredFiles();
+                                scheduleAutoSave();
+                            } else {
+                                console.error('Upload failed:', data.error);
+                                alert('Upload failed: ' + (data.error || 'unknown error'));
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Upload error:', err);
+                            alert('Upload error — is the local API running on port 8513?');
+                        });
                     };
                     reader.readAsArrayBuffer(file);
                 });
@@ -1278,7 +1446,19 @@ html_code = """
 
         function handleRemoveFile(fileId) {
             if (confirm(`Are you sure you want to delete this file?`)) {
-                window.location.href = `?action=delete_file&file_id=${fileId}`;
+                fetch(`http://127.0.0.1:8513/api/delete_file?id=${fileId}`, { method: 'POST' })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Remove from local map and re-render
+                            const spk = getSPK();
+                            Object.keys(storedFilesMap[spk] || {}).forEach(cat => {
+                                storedFilesMap[spk][cat] = (storedFilesMap[spk][cat] || []).filter(f => f.id != fileId);
+                            });
+                            renderStoredFiles();
+                        }
+                    })
+                    .catch(err => console.error('Delete error:', err));
             }
         }
 
@@ -1301,6 +1481,9 @@ html_code = """
                     let html = fileList.map(f => {
                         let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
                         chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
+                        if (Number.isInteger(f.id)) {
+                            chip += ` <a href="http://127.0.0.1:8513/api/download_file?id=${f.id}" target="_blank" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">⬇</a>`;
+                        }
                         chip += `</span>`;
                         return chip;
                     }).join('');
@@ -1309,6 +1492,9 @@ html_code = """
                         tableBox.innerHTML = fileList.map(f => {
                             let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
                             chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
+                            if (Number.isInteger(f.id)) {
+                                chip += ` <a href="http://127.0.0.1:8513/api/download_file?id=${f.id}" target="_blank" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">⬇</a>`;
+                            }
                             chip += `</span>`;
                             return chip;
                         }).join('');
