@@ -620,6 +620,10 @@ html_code = """
                                         </div>
                                     </div>
                                 </div>
+                                <div class="mt-2">
+                                    <label class="block text-xs font-semibold text-emerald-700 mb-1">Cash On Hand - End of Last Month</label>
+                                    <input type="text" id="cooh-last-month" placeholder="e.g. $22,150.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                </div>
                                 <div id="files-cooh" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
                             </div>
 
@@ -641,6 +645,10 @@ html_code = """
                                                 <button type="button" onclick="clearUploadField('brinks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
                                             </div>
                                         </div>
+                                    </div>
+                                    <div class="mt-2">
+                                        <label class="block text-xs font-semibold text-emerald-700 mb-1">Total Brinks Deposit</label>
+                                        <input type="text" id="brinks-total-deposit" placeholder="e.g. $18,450.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                     </div>
                                     <div id="files-brinks" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
                                 </div>
@@ -798,7 +806,13 @@ html_code = """
                         <h3 class="text-lg font-bold text-emerald-300">Accountant Review Portal & Monthly Record Viewer</h3>
                         <p class="text-emerald-200/80 text-xs mt-0.5">Accountant view for <span id="portal-store-label" class="text-white font-semibold">Oz 1</span> – <span id="portal-period-label" class="text-white font-semibold">October 2026</span></p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button onclick="generateReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Report
+                        </button>
+                        <button onclick="generateDetailedReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Detailed Report
+                        </button>
                         <button onclick="downloadMasterZip()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-500 transition">
                             📦 Download All as ZIP
                         </button>
@@ -916,6 +930,10 @@ html_code = """
             document.getElementById('cooh-date').value = "";
             document.getElementById('brinks-date').value = "";
             document.getElementById('chargebacks-text').value = "Nothing to report.";
+            const lastMonthEl = document.getElementById('cooh-last-month');
+            if (lastMonthEl) lastMonthEl.value = "";
+            const brinksDepEl = document.getElementById('brinks-total-deposit');
+            if (brinksDepEl) brinksDepEl.value = "";
 
             const checkboxes = ['brinks', 'green1', 'green2', 'green3', 'mon1', 'mon2', 'ocs1', 'ocs2', 'gas1', 'gas2'];
             checkboxes.forEach(k => {
@@ -962,6 +980,14 @@ html_code = """
                     }
                     if(chkData.dates) {
                         if(chkData.dates.brinks) document.getElementById('brinks-date').value = chkData.dates.brinks;
+                    }
+                    if (chkData.cooh_last_month) {
+                        const el = document.getElementById('cooh-last-month');
+                        if (el) el.value = chkData.cooh_last_month;
+                    }
+                    if (chkData.brinks_total_deposit) {
+                        const el = document.getElementById('brinks-total-deposit');
+                        if (el) el.value = chkData.brinks_total_deposit;
                     }
                 }
                 if(data.inventory_data) {
@@ -1173,7 +1199,16 @@ html_code = """
                 'brinks': document.getElementById('brinks-date')?.value || ''
             };
 
-            const checklistData = { checkboxes: checkboxes, notes: notes, dates: dates };
+            const coohLastMonth = document.getElementById('cooh-last-month')?.value || '';
+            const brinksTotalDeposit = document.getElementById('brinks-total-deposit')?.value || '';
+
+            const checklistData = { 
+                checkboxes: checkboxes, 
+                notes: notes, 
+                dates: dates,
+                cooh_last_month: coohLastMonth,
+                brinks_total_deposit: brinksTotalDeposit
+            };
 
             // Include inventory so it persists
             const inv = storeInventoryData[spk] || null;
@@ -1368,6 +1403,54 @@ html_code = """
             if (confirm(`Are you sure you want to delete user "${username}"?`)) {
                 window.location.href = `?action=delete_user&username=${username}`;
             }
+        }
+
+        function generateReport() {
+            const spk = getSPK();
+            const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
+            const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
+            const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
+            const inv = storeInventoryData[spk];
+            let totalSold = 0;
+            if (inv && inv.rows) {
+                inv.rows.forEach(r => {
+                    const sold = parseFloat(String(r.Sold || r.sold || 0).replace(/[^0-9.-]/g, '')) || 0;
+                    totalSold += sold;
+                });
+            }
+            alert(
+                `Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n` +
+                `Cash On Hand (End of Day): ${cooh}\n` +
+                `Cash On Hand (End of Last Month): ${coohLast}\n` +
+                `Total Brinks Deposit: ${brinksDep}\n` +
+                `Total Inventory Sold: $${totalSold.toLocaleString(undefined, {minimumFractionDigits:2})}\n\n` +
+                `(Detailed financials available via Generate Detailed Report)`
+            );
+        }
+
+        function generateDetailedReport() {
+            const spk = getSPK();
+            const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
+            const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
+            const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
+            const chargebacks = document.getElementById('chargebacks-text')?.value || 'Nothing to report.';
+            const inv = storeInventoryData[spk];
+            let detail = `Detailed Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n`;
+            detail += `Cash On Hand (End of Day): ${cooh}\n`;
+            detail += `Cash On Hand (End of Last Month): ${coohLast}\n`;
+            detail += `Total Brinks Deposit: ${brinksDep}\n`;
+            detail += `Chargebacks: ${chargebacks}\n\n`;
+            if (inv && inv.rows) {
+                detail += `Inventory Sold by Category:\n`;
+                inv.rows.forEach(r => {
+                    const cat = r.Category || 'Unknown';
+                    const sold = r.Sold || r.sold || 0;
+                    detail += `  ${cat}: ${sold}\n`;
+                });
+            } else {
+                detail += `No inventory data loaded.\n`;
+            }
+            alert(detail);
         }
 
         initApp();
