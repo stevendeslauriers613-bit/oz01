@@ -24,7 +24,6 @@ def get_dropbox_client():
     """Get authenticated Dropbox client."""
     try:
         import dropbox
-        # Prefer Streamlit secrets
         try:
             app_key = st.secrets.get("DROPBOX_APP_KEY", "blkc7dhojszn2tq")
             app_secret = st.secrets.get("DROPBOX_APP_SECRET", "cvw2dfuj7mvzfqo")
@@ -37,7 +36,6 @@ def get_dropbox_client():
                 )
         except Exception:
             pass
-        # Fallback to local credentials file
         if not os.path.exists(DROPBOX_CREDENTIALS_FILE):
             return None
         with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
@@ -393,7 +391,7 @@ add_user_btn_html = (
     else ""
 )
 
-# --- FULL HTML UI WITH EMBEDDED PERSISTENCE & AUTO-SUMMING FINANCIAL CALCULATOR ---
+# --- FULL HTML UI WITH REBUILT ACCOUNTING & CASH CONSOLIDATION SECTION ---
 html_code = """
 <!DOCTYPE html>
 <html lang="en">
@@ -464,7 +462,7 @@ html_code = """
                 </div>
             </div>
 
-            <!-- COLLAPSIBLE CREDENTIAL MANAGER (ADMIN ONLY) -->
+            <!-- CREDENTIAL MANAGER (ADMIN ONLY) -->
             <details id="credential-manager-view" class="REPLACE_ADMIN_HIDDEN_CLASS mb-8 bg-zinc-50 rounded-2xl border border-zinc-300 shadow-xs overflow-hidden">
                 <summary class="p-4 bg-emerald-50 hover:bg-emerald-100 cursor-pointer font-bold text-emerald-900 text-xs flex items-center justify-between transition">
                     <span class="flex items-center gap-2"><span>🔐</span> Employee & Store Login Credentials Directory (Click to Edit)</span>
@@ -600,10 +598,10 @@ html_code = """
                                 </div>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                                     <div class="space-y-2">
-                                        <input type="text" id="cooh-text" placeholder="End of day, e.g. $24,521.10" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                        <input type="text" id="cooh-text" placeholder="End of day, e.g. $24,521.10" oninput="syncNotes('cooh', this.value); updateFinancialSummary();" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                         <div>
                                             <label class="block text-xs font-bold text-emerald-800 mb-1">Cash On Hand - End of Last Month</label>
-                                            <input type="text" id="cooh-last-month" placeholder="e.g. $22,150.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                            <input type="text" id="cooh-last-month" placeholder="e.g. $22,150.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                         </div>
                                     </div>
                                     <div class="flex flex-col gap-1">
@@ -628,7 +626,7 @@ html_code = """
                                 <div class="pl-5 space-y-2">
                                     <div>
                                         <label class="block text-xs font-bold text-emerald-800 mb-1">Total Brinks Deposit</label>
-                                        <input type="text" id="brinks-total-deposit" placeholder="e.g. $18,450.00" oninput="markChecklistItem('brinks'); scheduleAutoSave()" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                        <input type="text" id="brinks-total-deposit" placeholder="e.g. $18,450.00" oninput="markChecklistItem('brinks'); scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                                         <input type="text" id="brinks-note" placeholder="Add notes..." oninput="syncNotes('brinks', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
@@ -855,81 +853,111 @@ html_code = """
                     </table>
                 </div>
 
-                <!-- Monthly Financial Summary Report (Executive Owner View) -->
-                <div class="mt-6 bg-emerald-900/40 rounded-xl border border-emerald-800 p-5">
-                    <h4 class="text-base font-bold text-emerald-300 mb-4">Monthly Financial Summary & Owner Expense Report</h4>
+                <!-- Monthly Financial Summary Report (Executive Owner View) & Cash Consolidation Section -->
+                <div class="mt-6 bg-emerald-900/40 rounded-xl border border-emerald-800 p-5 space-y-6">
+                    <div>
+                        <h4 class="text-base font-bold text-emerald-300 mb-1">Monthly Financial Summary & Profitability</h4>
+                        <p class="text-xs text-emerald-200/70 mb-4">Calculated from Greenline Financials CSV (or inventory sold fallback) minus operating expenses.</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Total Sales (Revenue)</span>
+                                <span id="fin-total-sales" class="text-lg font-bold text-white">$0.00</span>
+                            </div>
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Cost of Goods Sold (COGS)</span>
+                                <span id="fin-cogs" class="text-lg font-bold text-emerald-200">$0.00</span>
+                                <span id="fin-gross-margin" class="text-[11px] text-emerald-200 block">Gross Margin: 0%</span>
+                            </div>
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Net Operating Income (NOI)</span>
+                                <span id="fin-net" class="text-lg font-bold text-white">$0.00</span>
+                            </div>
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Operating Margin</span>
+                                <span id="fin-net-margin" class="text-lg font-bold text-amber-300">0.0%</span>
+                            </div>
+                        </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                        <div class="bg-emerald-800/50 p-3 rounded-lg">
-                            <span class="text-xs text-emerald-300 block">Total Sales (Inventory Sold)</span>
-                            <span id="fin-total-sales" class="text-lg font-bold text-white">$0.00</span>
+                        <h5 class="text-xs font-bold text-emerald-300 mb-2 uppercase tracking-wide">Operating Expenses (OpEx)</h5>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Store Rent & Lease</label>
+                                <input type="text" id="exp-rent" value="2000.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Employee Salaries</label>
+                                <input type="text" id="exp-salaries" value="1950.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Utilities</label>
+                                <input type="text" id="exp-utilities" value="1200.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Advertising</label>
+                                <input type="text" id="exp-advertising" value="1000.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Marketing</label>
+                                <input type="text" id="exp-marketing" value="800.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Data Deals & Analytics</label>
+                                <input type="text" id="exp-datadeals" value="1500.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Insurance</label>
+                                <input type="text" id="exp-insurance" value="500.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Garbage Disposal</label>
+                                <input type="text" id="exp-garbage" value="150.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Security & POS Software</label>
+                                <input type="text" id="exp-security" value="350.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-emerald-200 block">Licenses & Compliance</label>
+                                <input type="text" id="exp-licenses" value="300.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
+                            </div>
                         </div>
-                        <div class="bg-emerald-800/50 p-3 rounded-lg">
-                            <span class="text-xs text-emerald-300 block">Cost of Goods Sold (COGS)</span>
-                            <span id="fin-cogs" class="text-lg font-bold text-emerald-200">$0.00</span>
-                            <span id="fin-gross-margin" class="text-[11px] text-emerald-200 block">Gross Margin: 0%</span>
-                        </div>
-                        <div class="bg-emerald-800/50 p-3 rounded-lg">
-                            <span class="text-xs text-emerald-300 block">Net Operating Income (NOI)</span>
-                            <span id="fin-net" class="text-lg font-bold text-white">$0.00</span>
-                        </div>
-                        <div class="bg-emerald-800/50 p-3 rounded-lg">
-                            <span class="text-xs text-emerald-300 block">Operating Margin</span>
-                            <span id="fin-net-margin" class="text-lg font-bold text-amber-300">0.0%</span>
+                        <div class="bg-emerald-800/30 p-2.5 rounded-lg flex justify-between items-center text-xs">
+                            <span class="text-emerald-300 font-bold">Total Operating Expenses:</span>
+                            <span id="fin-total-expenses" class="font-bold text-white">$0.00</span>
                         </div>
                     </div>
 
-                    <h5 class="text-sm font-bold text-emerald-300 mb-3">Operating Expenses (Editable Fields)</h5>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Store Rent & Lease</label>
-                            <input type="text" id="exp-rent" value="2000.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Employee Salaries</label>
-                            <input type="text" id="exp-salaries" value="1950.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Utilities</label>
-                            <input type="text" id="exp-utilities" value="1200.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Advertising</label>
-                            <input type="text" id="exp-advertising" value="1000.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Marketing</label>
-                            <input type="text" id="exp-marketing" value="800.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Data Deals & Analytics</label>
-                            <input type="text" id="exp-datadeals" value="1500.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Insurance</label>
-                            <input type="text" id="exp-insurance" value="500.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Garbage Disposal</label>
-                            <input type="text" id="exp-garbage" value="150.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Security & POS Software</label>
-                            <input type="text" id="exp-security" value="350.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-emerald-200 block">Licenses & Compliance</label>
-                            <input type="text" id="exp-licenses" value="300.00" oninput="updateFinancialSummary(); scheduleAutoSave();" class="w-full bg-emerald-950 text-white border border-emerald-700 rounded px-2 py-1 text-xs">
-                        </div>
-                    </div>
+                    <!-- REBUILT CASH CONSOLIDATION SECTION -->
+                    <div class="border-t border-emerald-800 pt-5">
+                        <h4 class="text-base font-bold text-emerald-300 mb-1">Cash Consolidation & Drawer Reconciliation</h4>
+                        <p class="text-xs text-emerald-200/70 mb-4">Formula: Ending Safe Cash = (Last Month Cash + Cash Sales) - Total Brinks Pickups. Variance = Actual Count - Expected Safe Cash.</p>
 
-                    <div class="bg-emerald-800/30 p-3 rounded-lg mb-3 flex justify-between items-center">
-                        <span class="text-xs text-emerald-300 font-bold">Total Operating Expenses (OpEx):</span>
-                        <span id="fin-total-expenses" class="text-sm font-bold text-white">$0.00</span>
-                    </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Last Month Ending Cash</span>
+                                <span id="cc-last-month" class="text-base font-bold text-white">$0.00</span>
+                            </div>
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">POS Cash Sales (Inflow)</span>
+                                <span id="cc-cash-sales" class="text-base font-bold text-emerald-200">$0.00</span>
+                            </div>
+                            <div class="bg-emerald-800/50 p-3 rounded-lg">
+                                <span class="text-xs text-emerald-300 block">Total Brinks Pickups (Outflow)</span>
+                                <span id="cc-brinks-out" class="text-base font-bold text-red-300">$0.00</span>
+                            </div>
+                        </div>
 
-                    <div class="text-xs text-emerald-200/70">
-                        <p>Sales and cost come from the uploaded Financials CSV (Net sales and Cost). Cash consolidation comes from the Payment Types CSV plus the cash and Brinks amounts you type. Expenses are the boxes above.</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-emerald-950/60 p-4 rounded-xl border border-emerald-700/50">
+                            <div>
+                                <span class="text-xs text-emerald-300 block font-semibold mb-1">Expected Safe Cash Balance</span>
+                                <span id="cc-expected" class="text-xl font-bold text-white">$0.00</span>
+                            </div>
+                            <div>
+                                <span class="text-xs text-emerald-300 block font-semibold mb-1">Drawer Variance (Actual vs Expected)</span>
+                                <span id="cc-variance" class="text-xl font-bold text-amber-300">$0.00</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -939,27 +967,10 @@ html_code = """
 
     <script>
         const ACCOUNTANT_ORDER = [
-            "Beverages",
-            "Dried Flower",
-            "Edibles",
-            "Extracts Ingested",
-            "Extracts Inhaled",
-            "Infused Pre-Rolls ",
-            "Milled Flower",
-            "Pre-Rolls",
-            "Seeds",
-            "Topicals",
-            "Vapes - Disposables",
-            "Vapes - 510 Threads",
-            "Vapes - Pods",
-            "__SPACER__",
-            "Accessories",
-            "Apparel / Swag",
-            "Gift Cards",
-            "Other Income",
-            "Raffles",
-            "System Fees",
-            "Uniforms"
+            "Beverages", "Dried Flower", "Edibles", "Extracts Ingested", "Extracts Inhaled",
+            "Infused Pre-Rolls ", "Milled Flower", "Pre-Rolls", "Seeds", "Topicals",
+            "Vapes - Disposables", "Vapes - 510 Threads", "Vapes - Pods", "__SPACER__",
+            "Accessories", "Apparel / Swag", "Gift Cards", "Other Income", "Raffles", "System Fees", "Uniforms"
         ];
 
         let isStoreManager = REPLACE_IS_STORE_MANAGER;
@@ -1031,6 +1042,7 @@ html_code = """
             if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
             storedFilesMap[spk][cat].push({ id, filename: file.name, local: true });
             renderStoredFiles();
+            markChecklistItem(cat);
             return id;
         }
 
@@ -1433,9 +1445,7 @@ html_code = """
             renderInventoryTable();
             showCSVFileInfo(fileName);
 
-            const green1Chk = document.getElementById('green1-chk');
-            if (green1Chk) green1Chk.checked = true;
-            updateCompletionBadge();
+            markChecklistItem('green1');
             saveAllData(true);
             updateFinancialSummary();
 
@@ -1546,7 +1556,13 @@ html_code = """
                 const coohValCell = document.getElementById('portal-cooh-val');
                 if (coohValCell) coohValCell.textContent = val.trim() !== '' ? val : 'Not entered';
             }
-            if (val && String(val).trim() !== '') markChecklistItem(key);
+            if (val && String(val).trim() !== '') {
+                if (key === 'brinks') markChecklistItem('brinks');
+                else if (key.startsWith('green')) markChecklistItem(key);
+                else if (key.startsWith('mon')) markChecklistItem(key);
+                else if (key.startsWith('ocs')) markChecklistItem(key);
+                else if (key.startsWith('gas')) markChecklistItem(key);
+            }
             scheduleAutoSave();
         }
 
@@ -1832,34 +1848,6 @@ html_code = """
             }
         }
 
-        function updateFinancialSummary() {
-            try {
-                const n = collectReportNumbers();
-                const formatMoney = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                const formatPct = (v) => Number(v || 0).toFixed(1) + '%';
-                const salesEl = document.getElementById('fin-total-sales');
-                const cogsEl = document.getElementById('fin-cogs');
-                const grossMEl = document.getElementById('fin-gross-margin');
-                const netEl = document.getElementById('fin-net');
-                const netMEl = document.getElementById('fin-net-margin');
-                const totExpEl = document.getElementById('fin-total-expenses');
-                if (salesEl) salesEl.textContent = formatMoney(n.totalSales);
-                if (cogsEl) cogsEl.textContent = formatMoney(n.totalCogs);
-                if (grossMEl) grossMEl.textContent = 'Gross Margin: ' + formatPct(n.grossMargin);
-                if (netEl) {
-                    netEl.textContent = formatMoney(n.net);
-                    netEl.className = n.net >= 0 ? 'text-lg font-bold text-white' : 'text-lg font-bold text-red-300';
-                }
-                if (netMEl) {
-                    netMEl.textContent = formatPct(n.netMargin);
-                    netMEl.className = n.netMargin >= 0 ? 'text-lg font-bold text-amber-300' : 'text-lg font-bold text-red-300';
-                }
-                if (totExpEl) totExpEl.textContent = formatMoney(n.totalExp);
-            } catch(e) {
-                console.error("updateFinancialSummary error:", e);
-            }
-        }
-
         let parsedFinancials = {};
 
         function moneyNum(val) {
@@ -1932,16 +1920,8 @@ html_code = """
             const fin = loadRememberedFinancials(spk);
             let totalSales = 0;
             let totalCogs = 0;
-            let salesSource = 'No financials CSV yet';
-            let cogsSource = 'No financials CSV yet';
-            if (fin.sales) {
-                totalSales = fin.sales;
-                salesSource = fin.salesSource || 'Financials CSV: Net sales';
-            }
-            if (fin.cogs) {
-                totalCogs = fin.cogs;
-                cogsSource = fin.cogsSource || 'Financials CSV: Cost';
-            }
+            if (fin.sales) totalSales = fin.sales;
+            if (fin.cogs) totalCogs = fin.cogs;
             if ((!totalSales || !totalCogs) && inv && inv.rows && inv.headers) {
                 const soldHeader = inv.headers.find(h => h && h.toLowerCase().includes('sold'));
                 const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
@@ -1951,40 +1931,70 @@ html_code = """
                     if (soldHeader && row[soldHeader] !== undefined) soldSum += moneyNum(row[soldHeader]);
                     if (costHeader && row[costHeader] !== undefined) costSum += moneyNum(row[costHeader]);
                 });
-                if (!totalSales && soldSum) {
-                    totalSales = soldSum;
-                    salesSource = 'Inventory CSV: Sold';
-                }
-                if (!totalCogs && costSum) {
-                    totalCogs = costSum;
-                    cogsSource = 'Inventory CSV: Cost';
-                }
+                if (!totalSales && soldSum) totalSales = soldSum;
+                if (!totalCogs && costSum) totalCogs = costSum;
             }
+
             const expItems = [
-                ['Store Rent & Lease', 'exp-rent'],
-                ['Employee Salaries', 'exp-salaries'],
-                ['Utilities', 'exp-utilities'],
-                ['Advertising', 'exp-advertising'],
-                ['Marketing', 'exp-marketing'],
-                ['Data Deals & Analytics', 'exp-datadeals'],
-                ['Insurance', 'exp-insurance'],
-                ['Garbage Disposal', 'exp-garbage'],
-                ['Security & POS Software', 'exp-security'],
-                ['Licenses & Compliance', 'exp-licenses']
+                ['Store Rent & Lease', 'exp-rent'], ['Employee Salaries', 'exp-salaries'],
+                ['Utilities', 'exp-utilities'], ['Advertising', 'exp-advertising'],
+                ['Marketing', 'exp-marketing'], ['Data Deals & Analytics', 'exp-datadeals'],
+                ['Insurance', 'exp-insurance'], ['Garbage Disposal', 'exp-garbage'],
+                ['Security & POS Software', 'exp-security'], ['Licenses & Compliance', 'exp-licenses']
             ].map(([label, id]) => [label, moneyNum(document.getElementById(id)?.value)]);
             const totalExp = expItems.reduce((s, [, n]) => s + n, 0);
+
             const gross = totalSales - totalCogs;
             const grossMargin = totalSales > 0 ? (gross / totalSales) * 100 : 0;
             const net = gross - totalExp;
             const netMargin = totalSales > 0 ? (net / totalSales) * 100 : 0;
-            const cooh = moneyNum(document.getElementById('cooh-text')?.value);
+
+            const coohActual = moneyNum(document.getElementById('cooh-text')?.value);
             const coohLast = moneyNum(document.getElementById('cooh-last-month')?.value);
-            const brinks = moneyNum(document.getElementById('brinks-total-deposit')?.value);
+            const brinksTotal = moneyNum(document.getElementById('brinks-total-deposit')?.value);
             const cashSales = fin.cash || 0;
-            const cardSales = fin.card || 0;
-            const expectedCash = coohLast + cashSales - brinks;
-            const variance = cooh - expectedCash;
-            return { spk, inv, fin, totalSales, totalCogs, salesSource, cogsSource, expItems, totalExp, gross, grossMargin, net, netMargin, cooh, coohLast, brinks, cashSales, cardSales, expectedCash, variance };
+
+            // Logic: Expected Safe Cash = (Last Month Cash + POS Cash Sales) - Brinks Pickups
+            const expectedSafeCash = (coohLast + cashSales) - brinksTotal;
+            const drawerVariance = coohActual - expectedSafeCash;
+
+            return {
+                spk, inv, fin, totalSales, totalCogs, expItems, totalExp,
+                gross, grossMargin, net, netMargin,
+                coohActual, coohLast, brinksTotal, cashSales, expectedSafeCash, drawerVariance
+            };
+        }
+
+        function updateFinancialSummary() {
+            try {
+                const n = collectReportNumbers();
+                const fmt = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const pct = (v) => Number(v || 0).toFixed(1) + '%';
+
+                document.getElementById('fin-total-sales').textContent = fmt(n.totalSales);
+                document.getElementById('fin-cogs').textContent = fmt(n.totalCogs);
+                document.getElementById('fin-gross-margin').textContent = 'Gross Margin: ' + pct(n.grossMargin);
+                document.getElementById('fin-net').textContent = fmt(n.net);
+                document.getElementById('fin-net').textContent = fmt(n.net);
+                const netEl = document.getElementById('fin-net');
+                netEl.className = n.net >= 0 ? 'text-lg font-bold text-white' : 'text-lg font-bold text-red-300';
+                
+                document.getElementById('fin-net-margin').textContent = pct(n.netMargin);
+                document.getElementById('fin-total-expenses').textContent = fmt(n.totalExp);
+
+                // Cash Consolidation UI updates
+                document.getElementById('cc-last-month').textContent = fmt(n.coohLast);
+                document.getElementById('cc-cash-sales').textContent = fmt(n.cashSales);
+                document.getElementById('cc-brinks-out').textContent = fmt(n.brinksTotal);
+                document.getElementById('cc-expected').textContent = fmt(n.expectedSafeCash);
+                
+                const varEl = document.getElementById('cc-variance');
+                varEl.textContent = fmt(n.drawerVariance);
+                varEl.className = n.drawerVariance === 0 ? 'text-xl font-bold text-emerald-300' : 'text-xl font-bold text-amber-300';
+
+            } catch(e) {
+                console.error("updateFinancialSummary error:", e);
+            }
         }
 
         function showInfographicReport(detailed) {
@@ -1992,7 +2002,7 @@ html_code = """
             if (existing) existing.remove();
             updateFinancialSummary();
             const n = collectReportNumbers();
-            const money = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const fmt = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             const pct = (v) => Number(v || 0).toFixed(1) + '%';
 
             let categoryHtml = '<p style="color:#a7f3d0;font-size:13px;">Upload the inventory CSV to see sales by category.</p>';
@@ -2009,7 +2019,7 @@ html_code = """
                     const width = (r.sold / maxSold * 100).toFixed(0);
                     return `<div style="margin-bottom:7px;">
                         <div style="display:flex;justify-content:space-between;font-size:12px;">
-                            <span>${r.name}</span><span>${money(r.sold)}</span>
+                            <span>${r.name}</span><span>${fmt(r.sold)}</span>
                         </div>
                         <div style="background:#065f46;height:7px;border-radius:4px;overflow:hidden;">
                             <div style="background:#34d399;height:100%;width:${width}%;"></div>
@@ -2020,22 +2030,9 @@ html_code = """
 
             const expenseHtml = n.expItems.map(([label, val]) =>
                 `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #065f46;">
-                    <span style="color:#a7f3d0;">${label}</span><span>${money(val)}</span>
+                    <span style="color:#a7f3d0;">${label}</span><span>${fmt(val)}</span>
                 </div>`
             ).join('');
-
-            const docs = [
-                ['Cash On Hand', 'cooh'], ['Brinks', 'brinks'], ['Inventory', 'green1'], ['Financials', 'green2'],
-                ['Payment Types', 'green3'], ['Moneris Counter', 'mon1'], ['Moneris Online', 'mon2'],
-                ['OCS Statement', 'ocs1'], ['OCS Invoices', 'ocs2'], ['Gas Details', 'gas1'], ['Gas Summary', 'gas2']
-            ];
-            const docHtml = docs.map(([label, key]) => {
-                const files = (storedFilesMap[n.spk] && storedFilesMap[n.spk][key]) ? storedFilesMap[n.spk][key] : [];
-                const names = files.length ? files.map(f => f.filename).join(', ') : 'No file';
-                return `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:4px 0;border-bottom:1px solid #065f46;">
-                    <span style="color:#a7f3d0;">${label}</span><span style="text-align:right;">${names}</span>
-                </div>`;
-            }).join('');
 
             const modal = document.createElement('div');
             modal.id = 'report-modal';
@@ -2044,37 +2041,31 @@ html_code = """
                 <div id="report-sheet" style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:980px;width:100%;max-height:92vh;overflow:auto;color:white;padding:24px;">
                     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
                         <div>
-                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">${detailed ? 'Detailed Accounting Report' : 'Business Health Dashboard'}</h2>
+                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">${detailed ? 'Detailed Accounting & Cash Report' : 'Business Health Dashboard'}</h2>
                             <p style="margin:4px 0 0;font-size:14px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
                         </div>
                         <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">X</button>
                     </div>
 
-                    <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0;">Sales: ${n.salesSource}. Cost: ${n.cogsSource}. Expenses, cash on hand, and Brinks are the amounts typed on this page.</p>
-                    <h3 style="color:#6ee7b7;font-size:15px;margin:16px 0 10px;">Cash Consolidation</h3>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.cooh)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">End of Last Month</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.coohLast)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.brinks)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Cash</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.cashSales)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Moneris</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.fin.moneris || 0)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Online</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.fin.online || 0)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Debit</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.fin.debit || 0)}</div></div>
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:16px 0 10px;">Cash Consolidation & Drawer Reconciliation</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Last Month Cash</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${fmt(n.coohLast)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">POS Cash Sales</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${fmt(n.cashSales)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Brinks Pickups</div><div style="font-size:18px;font-weight:bold;margin-top:4px;color:#fca5a5;">${fmt(n.brinksTotal)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Actual EOD Count</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${fmt(n.coohActual)}</div></div>
                     </div>
                     <div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:20px;text-align:center;">
-                        <div style="font-size:12px;color:#6ee7b7;">Calculated Cash Position</div>
-                        <div style="font-size:12px;color:#a7f3d0;margin:4px 0 6px;">End of Last Month + Cash Sales − Brinks Deposits</div>
-                        <div style="font-size:26px;font-weight:bold;color:#34d399;">${money(n.expectedCash)}</div>
-                        <div style="font-size:13px;color:#a7f3d0;margin-top:6px;">Variance vs actual cash on hand: ${money(n.variance)}</div>
+                        <div style="font-size:12px;color:#6ee7b7;">Expected Safe Cash: ${fmt(n.expectedSafeCash)}</div>
+                        <div style="font-size:22px;font-weight:bold;color:${n.drawerVariance === 0 ? '#34d399' : '#fcd34d'};margin-top:4px;">Variance: ${fmt(n.drawerVariance)}</div>
                     </div>
 
                     <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Profitability</h3>
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Total Sales</div><div style="font-size:18px;font-weight:bold;">${money(n.totalSales)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">COGS</div><div style="font-size:18px;font-weight:bold;">${money(n.totalCogs)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Profit</div><div style="font-size:18px;font-weight:bold;">${money(n.gross)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Total Sales</div><div style="font-size:18px;font-weight:bold;">${fmt(n.totalSales)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">COGS</div><div style="font-size:18px;font-weight:bold;">${fmt(n.totalCogs)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Profit</div><div style="font-size:18px;font-weight:bold;">${fmt(n.gross)}</div></div>
                         <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Margin</div><div style="font-size:18px;font-weight:bold;color:#34d399;">${pct(n.grossMargin)}</div></div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Profit</div><div style="font-size:18px;font-weight:bold;color:${n.net >= 0 ? '#fff' : '#fca5a5'};">${money(n.net)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Profit</div><div style="font-size:18px;font-weight:bold;color:${n.net >= 0 ? '#fff' : '#fca5a5'};">${fmt(n.net)}</div></div>
                         <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Margin</div><div style="font-size:18px;font-weight:bold;color:#fcd34d;">${pct(n.netMargin)}</div></div>
                     </div>
 
@@ -2083,7 +2074,7 @@ html_code = """
                             <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
                             ${expenseHtml}
                             <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:6px;border-top:1px solid #065f46;font-size:13px;">
-                                <span>Total Expenses</span><span>${money(n.totalExp)}</span>
+                                <span>Total Expenses</span><span>${fmt(n.totalExp)}</span>
                             </div>
                         </div>
                         <div style="background:#064e3b;padding:14px;border-radius:10px;">
@@ -2091,7 +2082,6 @@ html_code = """
                             ${categoryHtml}
                         </div>
                     </div>
-                    ${detailed ? `<div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:16px;"><h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Source Documents</h3>${docHtml}</div>` : ''}
                     <div style="margin-top:12px;text-align:right;">
                         <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print / Save PDF</button>
                         <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
