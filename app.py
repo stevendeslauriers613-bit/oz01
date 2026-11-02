@@ -1030,50 +1030,59 @@ html_code = """
             }
 
             if (data) {
+                // Support both DB format (with checklist_json) and localStorage format (flat)
+                const chkData = data.checklist_json || data;
+
                 if(data.cooh_text !== undefined) {
                     document.getElementById('cooh-text').value = data.cooh_text;
                     syncNotes('cooh', data.cooh_text);
+                } else if (chkData.notes && chkData.notes.cooh) {
+                    document.getElementById('cooh-text').value = chkData.notes.cooh;
+                    syncNotes('cooh', chkData.notes.cooh);
                 }
                 if(data.cooh_date) document.getElementById('cooh-date').value = data.cooh_date;
+                else if (chkData.dates && chkData.dates.cooh) document.getElementById('cooh-date').value = chkData.dates.cooh;
+
                 if(data.chargebacks_text) {
                     document.getElementById('chargebacks-text').value = data.chargebacks_text;
                     syncNotes('chargebacks', data.chargebacks_text);
+                } else if (chkData.notes && chkData.notes.chargebacks) {
+                    document.getElementById('chargebacks-text').value = chkData.notes.chargebacks;
+                    syncNotes('chargebacks', chkData.notes.chargebacks);
                 }
-                if(data.checklist_json) {
-                    const chkData = data.checklist_json;
-                    if(chkData.checkboxes) {
-                        Object.keys(chkData.checkboxes).forEach(k => {
-                            const chk = document.getElementById(`${k}-chk`);
-                            if(chk) chk.checked = chkData.checkboxes[k];
-                        });
-                    }
-                    if(chkData.notes) {
-                        Object.keys(chkData.notes).forEach(k => {
-                            const nEl = document.getElementById(`${k}-note`);
-                            if(nEl) {
-                                nEl.value = chkData.notes[k];
-                                syncNotes(k, chkData.notes[k]);
-                            }
-                        });
-                    }
-                    if(chkData.dates) {
-                        if(chkData.dates.brinks) document.getElementById('brinks-date').value = chkData.dates.brinks;
-                    }
-                    if (chkData.cooh_last_month) {
-                        const el = document.getElementById('cooh-last-month');
-                        if (el) el.value = chkData.cooh_last_month;
-                    }
-                    if (chkData.brinks_total_deposit) {
-                        const el = document.getElementById('brinks-total-deposit');
-                        if (el) el.value = chkData.brinks_total_deposit;
-                    }
-                    if (chkData.expenses) {
-                        const exp = chkData.expenses;
-                        ['rent','utilities','insurance','salary','cc','ads','repairs','other'].forEach(k => {
-                            const el = document.getElementById('exp-' + k);
-                            if (el && exp[k] !== undefined) el.value = exp[k];
-                        });
-                    }
+
+                if(chkData.checkboxes) {
+                    Object.keys(chkData.checkboxes).forEach(k => {
+                        const chk = document.getElementById(`${k}-chk`);
+                        if(chk) chk.checked = chkData.checkboxes[k];
+                    });
+                }
+                if(chkData.notes) {
+                    Object.keys(chkData.notes).forEach(k => {
+                        const nEl = document.getElementById(`${k}-note`);
+                        if(nEl) {
+                            nEl.value = chkData.notes[k];
+                            syncNotes(k, chkData.notes[k]);
+                        }
+                    });
+                }
+                if(chkData.dates) {
+                    if(chkData.dates.brinks) document.getElementById('brinks-date').value = chkData.dates.brinks;
+                }
+                if (chkData.cooh_last_month) {
+                    const el = document.getElementById('cooh-last-month');
+                    if (el) el.value = chkData.cooh_last_month;
+                }
+                if (chkData.brinks_total_deposit) {
+                    const el = document.getElementById('brinks-total-deposit');
+                    if (el) el.value = chkData.brinks_total_deposit;
+                }
+                if (chkData.expenses) {
+                    const exp = chkData.expenses;
+                    ['rent','utilities','insurance','salary','cc','ads','repairs','other'].forEach(k => {
+                        const el = document.getElementById('exp-' + k);
+                        if (el && exp[k] !== undefined) el.value = exp[k];
+                    });
                 }
                 if(data.inventory_data) {
                     storeInventoryData[spk] = {
