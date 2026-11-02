@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import uuid
+import zlib
 import zipfile
 from datetime import datetime
 import pandas as pd
@@ -14,36 +15,24 @@ import streamlit.components.v1 as components
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-# --- DROPBOX CREDENTIALS (prefer Streamlit secrets) ---
+# --- DROPBOX SETUP ---
+DROPBOX_CREDENTIALS_FILE = "dropbox_credentials.json"
 DROPBOX_FOLDER_PATH = "/OZ_Store_Uploads"
 
+
 def get_dropbox_client():
-    """Get authenticated Dropbox client using Streamlit secrets or local fallback."""
+    """Get authenticated Dropbox client."""
     try:
         import dropbox
-
-        # Prefer Streamlit secrets (works on Streamlit Cloud)
-        app_key = st.secrets.get("DROPBOX_APP_KEY", "blkc7dhojszn2tq")
-        app_secret = st.secrets.get("DROPBOX_APP_SECRET", "cvw2dfuj7mvzfqo")
-        refresh_token = st.secrets.get("DROPBOX_REFRESH_TOKEN", None)
-
-        # Local fallback: dropbox_credentials.json
-        if not refresh_token and os.path.exists("dropbox_credentials.json"):
-            with open("dropbox_credentials.json", "r") as f:
-                creds = json.load(f)
-                refresh_token = creds.get("refresh_token")
-
-        if app_key and app_secret and refresh_token:
-            return dropbox.Dropbox(
-                app_key=app_key,
-                app_secret=app_secret,
-                oauth2_refresh_token=refresh_token
-            )
-
-        print("Dropbox: missing refresh token. Add DROPBOX_REFRESH_TOKEN to Streamlit secrets.")
-        return None
+        if not os.path.exists(DROPBOX_CREDENTIALS_FILE):
+            return None
+        with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
+            creds = json.load(f)
+        access_token = creds.get("access_token")
+        if not access_token:
+            return None
+        return dropbox.Dropbox(access_token)
     except Exception as e:
-        print("Dropbox init error:", e)
         return None
 
 
@@ -54,15 +43,10 @@ def ensure_dropbox_folder(dbx):
         dbx.files_create_folder_v2(DROPBOX_FOLDER_PATH)
 
 
-def upload_to_dropbox(dbx, filename, file_data, category, spk):
-    """Uploads file directly to Dropbox persistent storage folder."""
-    try:
-        dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{category}/{filename}"
-        dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-        return f"dropbox://{dropbox_path}"
-    except Exception as e:
-        print("Dropbox upload error:", e)
-        return None
+def upload_to_dropbox(dbx, filename, file_data):
+    dropbox_path = f"{DROPBOX_FOLDER_PATH}/{filename}"
+    dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+    return f"dropbox://{dropbox_path}"
 
 
 # Set page configuration
@@ -84,6 +68,9 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- DATABASE SETUP ---
 DB_FILE = "oz_store.db"
+UPLOAD_DIR = "uploads"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
 
 
 def init_db():
@@ -121,63 +108,6 @@ def init_db():
 
 init_db()
 
-def sync_dropbox_files_to_db():
-    """Scan Dropbox /OZ_Store_Uploads/files/ and insert any missing records into store_files so they appear in the app."""
-    try:
-        import dropbox
-        dbx = get_dropbox_client()
-        if not dbx:
-            print("Dropbox client unavailable — skipping file sync")
-            return
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # Get existing filepaths so we don't duplicate
-        cursor.execute("SELECT filepath FROM store_files")
-        existing = {row[0] for row in cursor.fetchall() if row[0]}
-
-        # List everything under /OZ_Store_Uploads/files/
-        result = dbx.files_list_folder("/OZ_Store_Uploads/files", recursive=True)
-        entries = list(result.entries)
-        while result.has_more:
-            result = dbx.files_list_folder_continue(result.cursor)
-            entries.extend(result.entries)
-
-        inserted = 0
-        for entry in entries:
-            if not isinstance(entry, dropbox.files.FileMetadata):
-                continue
-            path = entry.path_display  # e.g. /OZ_Store_Uploads/files/Oz 1_September_2026/green1/report.csv
-            if not path or f"dropbox://{path}" in existing:
-                continue
-
-            # Parse: /OZ_Store_Uploads/files/{spk}/{category}/{filename}
-            parts = path.strip("/").split("/")
-            if len(parts) < 5 or parts[0] != "OZ_Store_Uploads" or parts[1] != "files":
-                continue
-
-            spk = parts[2]
-            category = parts[3]
-            filename = "/".join(parts[4:])
-
-            dropbox_path = f"dropbox://{path}"
-            cursor.execute(
-                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
-                (spk, category, filename, dropbox_path)
-            )
-            inserted += 1
-
-        if inserted:
-            conn.commit()
-            print(f"Synced {inserted} Dropbox files into the database")
-        conn.close()
-    except Exception as e:
-        print("Dropbox sync error:", e)
-
-# Run sync on startup so existing Dropbox files (including September Oz 1 & Oz 7) appear in the app
-sync_dropbox_files_to_db()
-
 # --- HANDLE QUERY PARAMETER ACTIONS ---
 query_params = st.query_params
 
@@ -207,43 +137,6 @@ if "action" in query_params:
             cursor.execute("DELETE FROM users WHERE username = ?", (username,))
             conn.commit()
 
-    elif action == "save_checklist":
-        spk = query_params.get("spk", "")
-        cooh_text = query_params.get("cooh_text", "")
-        cooh_date = query_params.get("cooh_date", "")
-        chargebacks = query_params.get("chargebacks", "Nothing to report.")
-        checklist_json = query_params.get("checklist_json", "{}")
-        inventory_json = query_params.get("inventory_json", "")
-        inventory_filename = query_params.get("inventory_filename", "")
-        if spk:
-            cursor.execute(
-                """INSERT OR REPLACE INTO store_data 
-                   (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json, inventory_json, inventory_filename) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (spk, cooh_text, cooh_date, chargebacks, checklist_json, 
-                 inventory_json if inventory_json else None, 
-                 inventory_filename if inventory_filename else None)
-            )
-            conn.commit()
-
-    elif action == "save_file":
-        spk = query_params.get("spk", "")
-        category = query_params.get("category", "")
-        filename = query_params.get("filename", "")
-        file_b64 = query_params.get("file_b64", "")
-        if spk and filename and file_b64:
-            file_bytes = base64.b64decode(file_b64)
-            dbx = get_dropbox_client()
-            filepath = ""
-            if dbx:
-                ensure_dropbox_folder(dbx)
-                filepath = upload_to_dropbox(dbx, filename, file_bytes, category, spk) or ""
-            cursor.execute(
-                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
-                (spk, category, filename, filepath)
-            )
-            conn.commit()
-
     elif action == "delete_file":
         file_id = query_params.get("file_id")
         if file_id:
@@ -258,6 +151,11 @@ if "action" in query_params:
                             dbx.files_delete_v2(filepath.replace("dropbox://", ""))
                         except Exception:
                             pass
+                elif os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                    except Exception:
+                        pass
             cursor.execute("DELETE FROM store_files WHERE id = ?", (file_id,))
             conn.commit()
 
@@ -269,6 +167,37 @@ if "action" in query_params:
         conn.close()
         st.query_params.clear()
         st.rerun()
+
+    elif action == "download_file":
+        file_id = query_params.get("file_id")
+        if file_id:
+            cursor.execute("SELECT filename, filepath FROM store_files WHERE id = ?", (file_id,))
+            f_row = cursor.fetchone()
+            if f_row:
+                import mimetypes
+
+                filename = f_row[0]
+                filepath = f_row[1]
+                mime_type, _ = mimetypes.guess_type(filename)
+                if mime_type is None:
+                    mime_type = "application/octet-stream"
+
+                if filepath.startswith("dropbox://"):
+                    dbx = get_dropbox_client()
+                    if dbx:
+                        try:
+                            _, res = dbx.files_download(filepath.replace("dropbox://", ""))
+                            st.download_button(label=f"Download {filename}", data=res.content, file_name=filename,
+                                               mime=mime_type, key=f"dl_{file_id}")
+                            st.stop()
+                        except Exception:
+                            pass
+                elif os.path.exists(filepath):
+                    with open(filepath, "rb") as f:
+                        file_bytes = f.read()
+                    st.download_button(label=f"Download {filename}", data=file_bytes, file_name=filename,
+                                       mime=mime_type, key=f"dl_{file_id}")
+                    st.stop()
 
     conn.close()
     st.query_params.clear()
@@ -405,17 +334,17 @@ add_user_btn_html = (
     else ""
 )
 
-# --- FULL HTML UI WITH EMBEDDED PERSISTENCE & AUTO-PUSH FORMATTER TO GREEN1 ---
+# --- FULL HTML UI WITH EMBEDDED PERSISTENCE & AUTO-SUMMING FINANCIAL CALCULATOR ---
 html_code = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The OZ Store - Multi-Store Accountant Package Manager</title>
+    <title>The OZ Store - Executive Financial Report & Package Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
@@ -430,7 +359,7 @@ html_code = """
                 </div>
                 <div>
                     <h1 class="text-xl md:text-2xl font-extrabold text-white tracking-tight">The OZ Store</h1>
-                    <p class="text-emerald-100/80 text-xs mt-0.5">Secure Store Inventory & Monthly Accountant Document Package Manager</p>
+                    <p class="text-emerald-100/80 text-xs mt-0.5">Executive Financial & Accountant Document Package Manager</p>
                 </div>
             </div>
 
@@ -459,7 +388,7 @@ html_code = """
                     </select>
                 </div>
                 <button onclick="window.location.href='?action=sign_out'" class="bg-emerald-900 hover:bg-emerald-950 text-emerald-100 px-3.5 py-2 rounded-xl text-xs font-semibold border border-emerald-700 transition">
-                    Sign Out (__CURRENT_NAME__)
+                    Sign Out (REPLACE_CURRENT_NAME)
                 </button>
             </div>
         </header>
@@ -469,15 +398,15 @@ html_code = """
             <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 pb-4 border-b border-zinc-200">
                 <div class="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin w-full md:w-auto" id="store-tabs"></div>
                 <div class="flex items-center gap-3">
-                    __ADD_USER_BTN_HTML__
+                    REPLACE_ADD_USER_BTN_HTML
                     <div class="text-xs text-zinc-500 font-medium bg-zinc-50 px-3 py-1.5 rounded-lg border border-zinc-200">
-                        👤 Logged in as: <span class="font-bold text-emerald-800">__CURRENT_NAME__</span>
+                        👤 Logged in as: <span class="font-bold text-emerald-800">REPLACE_CURRENT_NAME</span>
                     </div>
                 </div>
             </div>
 
             <!-- COLLAPSIBLE CREDENTIAL MANAGER (ADMIN ONLY) -->
-            <details id="credential-manager-view" class="__ADMIN_HIDDEN_CLASS__ mb-8 bg-zinc-50 rounded-2xl border border-zinc-300 shadow-xs overflow-hidden">
+            <details id="credential-manager-view" class="REPLACE_ADMIN_HIDDEN_CLASS mb-8 bg-zinc-50 rounded-2xl border border-zinc-300 shadow-xs overflow-hidden">
                 <summary class="p-4 bg-emerald-50 hover:bg-emerald-100 cursor-pointer font-bold text-emerald-900 text-xs flex items-center justify-between transition">
                     <span class="flex items-center gap-2"><span>🔐</span> Employee & Store Login Credentials Directory (Click to Edit)</span>
                     <span class="text-[11px] text-emerald-700 underline font-normal">Expand / Collapse</span>
@@ -495,7 +424,7 @@ html_code = """
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-zinc-100 text-zinc-700">
-                                __CRED_TABLE_ROWS__
+                                REPLACE_CRED_TABLE_ROWS
                             </tbody>
                         </table>
                     </div>
@@ -548,7 +477,7 @@ html_code = """
             </div>
 
             <!-- SIDE-BY-SIDE SECTIONS -->
-            <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 mb-8 __ACCOUNTANT_HIDDEN_CLASS__">
+            <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 mb-8 REPLACE_ACCOUNTANT_HIDDEN_CLASS">
 
                 <!-- LEFT SIDE: Inventory Report Formatter -->
                 <div class="xl:col-span-5 bg-zinc-50 rounded-xl p-5 border border-zinc-200 flex flex-col justify-between shadow-xs">
@@ -557,7 +486,7 @@ html_code = """
                             <h3 class="text-base font-bold text-emerald-800 flex items-center gap-2">Inventory Report Formatter</h3>
                             <span id="inv-status-badge" class="text-[11px] text-zinc-600 bg-white border border-zinc-300 px-2 py-0.5 rounded shadow-xs">Not Loaded</span>
                         </div>
-                        <p class="text-zinc-600 text-xs mb-4">Upload raw monthly CSV. Rows are sorted and automatically pushed to Greenline Inventory Summary.</p>
+                        <p class="text-zinc-600 text-xs mb-4">Upload raw monthly CSV. Rows are sorted with a blank space after row 14 (Vapes - Pods), styled with a green header, and pushed to Greenline Inventory Summary.</p>
 
                         <div id="drop-zone" class="border-2 border-dashed border-emerald-400 hover:border-emerald-700 rounded-xl p-5 text-center cursor-pointer transition-all bg-white group mb-4 shadow-xs">
                             <input type="file" id="file-input" accept=".csv" class="hidden">
@@ -579,8 +508,8 @@ html_code = """
 
                         <div class="bg-white rounded-lg border border-zinc-200 overflow-hidden max-h-56 overflow-y-auto mb-4 shadow-xs">
                             <table class="w-full text-left border-collapse text-[11px]">
-                                <thead class="bg-emerald-700 text-white sticky top-0 z-10 border-b border-emerald-800">
-                                    <tr id="table-header"><th class="p-2 font-semibold" style="background:#065f46;color:white;">Category</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Opening</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Sold</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Closing</th></tr>
+                                <thead class="bg-emerald-800 text-white sticky top-0 z-10 border-b border-emerald-900">
+                                    <tr id="table-header"><th class="p-2 font-semibold">Category</th><th class="p-2 font-semibold">Opening</th><th class="p-2 font-semibold">Sold</th><th class="p-2 font-semibold">Closing</th></tr>
                                 </thead>
                                 <tbody id="table-body" class="divide-y divide-zinc-100 text-zinc-700"><tr><td colspan="4" class="p-4 text-center text-zinc-400">No report uploaded yet.</td></tr></tbody>
                             </table>
@@ -620,10 +549,6 @@ html_code = """
                                         </div>
                                     </div>
                                 </div>
-                                <div class="mt-2">
-                                    <label class="block text-xs font-semibold text-emerald-700 mb-1">Cash On Hand - End of Last Month</label>
-                                    <input type="text" id="cooh-last-month" placeholder="e.g. $22,150.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
-                                </div>
                                 <div id="files-cooh" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
                             </div>
 
@@ -645,10 +570,6 @@ html_code = """
                                                 <button type="button" onclick="clearUploadField('brinks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div class="mt-2">
-                                        <label class="block text-xs font-semibold text-emerald-700 mb-1">Total Brinks Deposit</label>
-                                        <input type="text" id="brinks-total-deposit" placeholder="e.g. $18,450.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                     </div>
                                     <div id="files-brinks" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files uploaded</div>
                                 </div>
@@ -774,7 +695,7 @@ html_code = """
                                         <input type="file" id="gas1-file" multiple onchange="handleItemFiles('gas1', this)" class="hidden">
                                         <div class="flex gap-1">
                                             <button type="button" onclick="document.getElementById('gas1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-zinc-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
                                         </div>
                                     </div>
                                     <div id="files-gas1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -806,13 +727,7 @@ html_code = """
                         <h3 class="text-lg font-bold text-emerald-300">Accountant Review Portal & Monthly Record Viewer</h3>
                         <p class="text-emerald-200/80 text-xs mt-0.5">Accountant view for <span id="portal-store-label" class="text-white font-semibold">Oz 1</span> – <span id="portal-period-label" class="text-white font-semibold">October 2026</span></p>
                     </div>
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <button onclick="generateReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
-                            Generate Report
-                        </button>
-                        <button onclick="generateDetailedReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
-                            Generate Detailed Report
-                        </button>
+                    <div class="flex items-center gap-2">
                         <button onclick="downloadMasterZip()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-500 transition">
                             📦 Download All as ZIP
                         </button>
@@ -835,6 +750,34 @@ html_code = """
                         <span class="text-xs font-semibold text-emerald-300 block mb-1">Checklist Status</span>
                         <span id="portal-chk-val" class="text-xs font-bold text-amber-300">0 / 10 Items Checked</span>
                     </div>
+                </div>
+
+                <div class="bg-emerald-900/40 rounded-xl border border-emerald-800 overflow-hidden">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead class="bg-emerald-900 text-emerald-300 border-b border-emerald-800">
+                            <tr>
+                                <th class="p-3 font-semibold">Document / Folder Category</th>
+                                <th class="p-3 font-semibold">Status</th>
+                                <th class="p-3 font-semibold">Document Date</th>
+                                <th class="p-3 font-semibold">Attached File Names</th>
+                                <th class="p-3 font-semibold">Notes & Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="portal-table-body" class="divide-y divide-emerald-800/60 text-emerald-100">
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Cash On Hand - End of Day</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-cooh">No date</td><td class="p-3" id="table-files-cooh">No files</td><td class="p-3 text-emerald-100" id="note-cooh">Not entered</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Brinks Book (Photos highlighted)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-brinks">Pending</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-brinks">No date</td><td class="p-3" id="table-files-brinks">No files</td><td class="p-3 text-emerald-100" id="note-brinks">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Inventory Summary</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green1">No files</td><td class="p-3 text-emerald-100" id="note-green1">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Financials</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green2">No files</td><td class="p-3 text-emerald-100" id="note-green2">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Payment Types</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green3">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green3">No files</td><td class="p-3 text-emerald-100" id="note-green3">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris: Counter Sales Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-mon1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-mon1">No files</td><td class="p-3 text-emerald-100" id="note-mon1">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris: Online Sales Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-mon2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-mon2">No files</td><td class="p-3 text-emerald-100" id="note-mon2">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Account Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs1">No files</td><td class="p-3 text-emerald-100" id="note-ocs1">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Invoices (Multiple)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs2">No files</td><td class="p-3 text-emerald-100" id="note-ocs2">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris Chargebacks</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-chargebacks">No files</td><td class="p-3 text-emerald-100" id="note-chargebacks">Nothing to report.</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Details Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas1">No files</td><td class="p-3 text-emerald-100" id="note-gas1">No notes</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Summary Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas2">No files</td><td class="p-3 text-emerald-100" id="note-gas2">No notes</td></tr>
+                        </tbody>
+                    </table>
                 </div>
 
                 <!-- Monthly Financial Summary Report (Executive Owner View) -->
@@ -914,40 +857,13 @@ html_code = """
                         <p>Total Sales and Cost of Goods Sold (COGS) are auto-calculated from your uploaded Greenline inventory CSV. Operating Expenses are fully editable above and saved automatically when you press <b>Save All</b>.</p>
                     </div>
                 </div>
-
-                <div class="bg-emerald-900/40 rounded-xl border border-emerald-800 overflow-hidden">
-                    <table class="w-full text-left border-collapse text-xs">
-                        <thead class="bg-emerald-900 text-emerald-300 border-b border-emerald-800">
-                            <tr>
-                                <th class="p-3 font-semibold">Document / Folder Category</th>
-                                <th class="p-3 font-semibold">Status</th>
-                                <th class="p-3 font-semibold">Document Date</th>
-                                <th class="p-3 font-semibold">Attached File Names</th>
-                                <th class="p-3 font-semibold">Notes & Details</th>
-                            </tr>
-                        </thead>
-                        <tbody id="portal-table-body" class="divide-y divide-emerald-800/60 text-emerald-100">
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Cash On Hand - End of Day</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-cooh">No date</td><td class="p-3" id="table-files-cooh">No files</td><td class="p-3 text-emerald-100" id="note-cooh">Not entered</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Brinks Book (Photos highlighted)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-brinks">Pending</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-brinks">No date</td><td class="p-3" id="table-files-brinks">No files</td><td class="p-3 text-emerald-100" id="note-brinks">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Inventory Summary</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green1">No files</td><td class="p-3 text-emerald-100" id="note-green1">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Financials</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green2">No files</td><td class="p-3 text-emerald-100" id="note-green2">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Payment Types</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green3">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green3">No files</td><td class="p-3 text-emerald-100" id="note-green3">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris: Counter Sales Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-mon1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-mon1">No files</td><td class="p-3 text-emerald-100" id="note-mon1">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris: Online Sales Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-mon2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-mon2">No files</td><td class="p-3 text-emerald-100" id="note-mon2">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Account Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs1">No files</td><td class="p-3 text-emerald-100" id="note-ocs1">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Invoices (Multiple)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs2">No files</td><td class="p-3 text-emerald-100" id="note-ocs2">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris Chargebacks</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-chargebacks">No files</td><td class="p-3 text-emerald-100" id="note-chargebacks">Nothing to report.</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Details Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas1">No files</td><td class="p-3 text-emerald-100" id="note-gas1">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Summary Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas2">No files</td><td class="p-3 text-emerald-100" id="note-gas2">No notes</td></tr>
-                        </tbody>
-                    </table>
-                </div>
             </div>
 
         </div>
     </div>
 
     <script>
+        // Exact 20 categories + 1 blank spacer row right after row 14 (Vapes - Pods)
         const ACCOUNTANT_ORDER = [
             "Beverages",
             "Dried Flower",
@@ -972,43 +888,158 @@ html_code = """
             "Uniforms"
         ];
 
-        let isStoreManager = __IS_STORE_MANAGER__;
-        let currentUserRole = "__CURRENT_ROLE__";
-        let currentUserName = "__CURRENT_NAME__";
+        let isStoreManager = REPLACE_IS_STORE_MANAGER;
+        let currentUserRole = "REPLACE_CURRENT_ROLE";
+        let currentUserName = "REPLACE_CURRENT_NAME";
 
         let stores = (isStoreManager || currentUserRole === 'store') ? [currentUserName] : ["Oz 1", "Oz 2", "Oz 3", "Oz 4", "Oz 5", "Oz 6", "Oz 7"];
         let activeStore = stores[0];
         let selectedMonth = "October";
         let selectedYear = "2026";
 
-        // Restore last selected period from localStorage so uploads don't reset to October
-        try {
-            const savedPeriod = localStorage.getItem('oz_selected_period');
-            if (savedPeriod) {
-                const p = JSON.parse(savedPeriod);
-                if (p.month) selectedMonth = p.month;
-                if (p.year) selectedYear = p.year;
-            }
-        } catch(e) {}
-
-        let storedFilesMap = __FILES_JSON__;
-        let persistentStoreData = __STORE_DATA_JSON__;
+        let storedFilesMap = REPLACE_FILES_JSON;
+        let persistentStoreData = REPLACE_STORE_DATA_JSON;
         let storeInventoryData = {};
 
-        function initApp() {
-            // Apply restored month/year to the dropdowns
-            const monthSel = document.getElementById('select-month');
-            const yearSel = document.getElementById('select-year');
-            if (monthSel) monthSel.value = selectedMonth;
-            if (yearSel) yearSel.value = selectedYear;
+        function isBlankSpacerRow(row) {
+            if (!row) return true;
+            const cat = row['Category'];
+            if (cat === null || cat === undefined || String(cat).trim() === '' || String(cat).startsWith('---')) {
+                return true;
+            }
+            return false;
+        }
 
+        // Normalizes any raw or previously saved rows to guarantee:
+        // 1. No Total / Sum rows at the bottom
+        // 2. Exact ACCOUNTANT_ORDER sorting
+        // 3. A true empty row after row 14 ("Vapes - Pods") before "Accessories"
+        function normalizeInventoryRows(fields, rawRows) {
+            const validRows = (rawRows || []).filter(row => {
+                if (!row) return false;
+                const cat = String(row['Category'] !== undefined && row['Category'] !== null ? row['Category'] : '').trim();
+                if (!cat || cat.startsWith('>') || cat.startsWith('---')) return false;
+                const lower = cat.toLowerCase();
+                if (lower === 'total' || lower === 'totals' || lower.startsWith('total ') || lower.includes('grand total')) return false;
+                return true;
+            });
+
+            const sortedRows = [];
+            ACCOUNTANT_ORDER.forEach(targetCat => {
+                if (targetCat === "__SPACER__") {
+                    const spacerRow = {};
+                    fields.forEach(f => { spacerRow[f] = ""; });
+                    spacerRow['Category'] = "";
+                    sortedRows.push(spacerRow);
+                    return;
+                }
+                const found = validRows.find(r => String(r['Category'] || '').trim().toLowerCase() === targetCat.trim().toLowerCase());
+                if (found) {
+                    const cleanRow = { Category: targetCat };
+                    fields.forEach(f => {
+                        if (f !== 'Category') {
+                            const rawVal = found[f];
+                            const num = parseFloat(String(rawVal !== undefined && rawVal !== null ? rawVal : '0').replace(/[^0-9.-]/g, ''));
+                            cleanRow[f] = isNaN(num) ? 0.00 : num;
+                        }
+                    });
+                    sortedRows.push(cleanRow);
+                } else {
+                    const emptyRow = { Category: targetCat };
+                    fields.forEach(f => { if (f !== 'Category') emptyRow[f] = 0.00; });
+                    sortedRows.push(emptyRow);
+                }
+            });
+
+            return sortedRows;
+        }
+
+        // Builds a styled Excel Workbook matching Oz 7_October_2026_Formatted_Inventory.xlsx
+        function buildFormattedWorkbook(headers, rows, sheetName) {
+            const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
+            const normalizedRows = normalizeInventoryRows(cleanHeaders, rows);
+
+            const aoa = [cleanHeaders];
+            normalizedRows.forEach(row => {
+                if (isBlankSpacerRow(row)) {
+                    aoa.push(cleanHeaders.map(() => null));
+                } else {
+                    aoa.push(cleanHeaders.map(h => {
+                        if (h === 'Category') return row[h];
+                        const num = parseFloat(String(row[h] !== undefined && row[h] !== null ? row[h] : 0).replace(/[^0-9.-]/g, ''));
+                        return isNaN(num) ? 0 : num;
+                    }));
+                }
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+            // Style Row 1: Dark Green Header (#065F46) with Bold White Text
+            const headerStyle = {
+                fill: { patternType: "solid", fgColor: { rgb: "065F46" } },
+                font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
+                alignment: { horizontal: "center", vertical: "center" },
+                border: {
+                    top: { style: "thin", color: { rgb: "047857" } },
+                    bottom: { style: "thin", color: { rgb: "047857" } },
+                    left: { style: "thin", color: { rgb: "047857" } },
+                    right: { style: "thin", color: { rgb: "047857" } }
+                }
+            };
+
+            const dataBorder = {
+                top: { style: "thin", color: { rgb: "D4D4D8" } },
+                bottom: { style: "thin", color: { rgb: "D4D4D8" } },
+                left: { style: "thin", color: { rgb: "D4D4D8" } },
+                right: { style: "thin", color: { rgb: "D4D4D8" } }
+            };
+
+            for (let c = 0; c < cleanHeaders.length; c++) {
+                const cellRef = XLSX.utils.encode_cell({ r: 0, c: c });
+                if (ws[cellRef]) ws[cellRef].s = headerStyle;
+            }
+
+            // Style Data Rows & leave Row 15 (r = 14) completely blank
+            for (let r = 1; r < aoa.length; r++) {
+                const isSpacer = aoa[r][0] === null || aoa[r][0] === "";
+                for (let c = 0; c < cleanHeaders.length; c++) {
+                    const cellRef = XLSX.utils.encode_cell({ r: r, c: c });
+                    if (isSpacer) {
+                        ws[cellRef] = { t: "s", v: "" };
+                    } else if (ws[cellRef]) {
+                        if (c === 0) {
+                            ws[cellRef].s = {
+                                font: { name: "Calibri", sz: 11, color: { rgb: "18181B" } },
+                                alignment: { horizontal: "left", vertical: "center" },
+                                border: dataBorder
+                            };
+                        } else {
+                            ws[cellRef].t = "n";
+                            ws[cellRef].z = "#,##0.00";
+                            ws[cellRef].s = {
+                                font: { name: "Calibri", sz: 11, color: { rgb: "18181B" } },
+                                alignment: { horizontal: "right", vertical: "center" },
+                                numFmt: "#,##0.00",
+                                border: dataBorder
+                            };
+                        }
+                    }
+                }
+            }
+
+            ws['!cols'] = cleanHeaders.map((h, i) => ({ wch: i === 0 ? 24 : 14 }));
+
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+            return wb;
+        }
+
+        function initApp() {
             renderTabs();
             loadStorePeriodData();
             setupCSVParser();
             document.getElementById('workspace-store-name').textContent = activeStore;
             document.getElementById('portal-store-label').textContent = activeStore;
-            document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
-            document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
         }
 
         function renderTabs() {
@@ -1032,9 +1063,6 @@ html_code = """
         function updatePeriod() {
             selectedMonth = document.getElementById('select-month').value;
             selectedYear = document.getElementById('select-year').value;
-            try {
-                localStorage.setItem('oz_selected_period', JSON.stringify({month: selectedMonth, year: selectedYear}));
-            } catch(e) {}
             document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             loadStorePeriodData();
@@ -1051,10 +1079,6 @@ html_code = """
             document.getElementById('cooh-date').value = "";
             document.getElementById('brinks-date').value = "";
             document.getElementById('chargebacks-text').value = "Nothing to report.";
-            const lastMonthEl = document.getElementById('cooh-last-month');
-            if (lastMonthEl) lastMonthEl.value = "";
-            const brinksDepEl = document.getElementById('brinks-total-deposit');
-            if (brinksDepEl) brinksDepEl.value = "";
 
             const checkboxes = ['brinks', 'green1', 'green2', 'green3', 'mon1', 'mon2', 'ocs1', 'ocs2', 'gas1', 'gas2'];
             checkboxes.forEach(k => {
@@ -1073,86 +1097,61 @@ html_code = """
             }
 
             if (data) {
-                // Support both DB format (with checklist_json) and localStorage format (flat)
-                const chkData = data.checklist_json || data;
-
                 if(data.cooh_text !== undefined) {
                     document.getElementById('cooh-text').value = data.cooh_text;
                     syncNotes('cooh', data.cooh_text);
-                } else if (chkData.notes && chkData.notes.cooh) {
-                    document.getElementById('cooh-text').value = chkData.notes.cooh;
-                    syncNotes('cooh', chkData.notes.cooh);
                 }
                 if(data.cooh_date) document.getElementById('cooh-date').value = data.cooh_date;
-                else if (chkData.dates && chkData.dates.cooh) document.getElementById('cooh-date').value = chkData.dates.cooh;
-
                 if(data.chargebacks_text) {
                     document.getElementById('chargebacks-text').value = data.chargebacks_text;
                     syncNotes('chargebacks', data.chargebacks_text);
-                } else if (chkData.notes && chkData.notes.chargebacks) {
-                    document.getElementById('chargebacks-text').value = chkData.notes.chargebacks;
-                    syncNotes('chargebacks', chkData.notes.chargebacks);
                 }
-
-                if(chkData.checkboxes) {
-                    Object.keys(chkData.checkboxes).forEach(k => {
-                        const chk = document.getElementById(`${k}-chk`);
-                        if(chk) chk.checked = chkData.checkboxes[k];
-                    });
+                if(data.checklist_json) {
+                    const chkData = data.checklist_json;
+                    if(chkData.checkboxes) {
+                        Object.keys(chkData.checkboxes).forEach(k => {
+                            const chk = document.getElementById(`${k}-chk`);
+                            if(chk) chk.checked = chkData.checkboxes[k];
+                        });
+                    }
+                    if(chkData.notes) {
+                        Object.keys(chkData.notes).forEach(k => {
+                            const nEl = document.getElementById(`${k}-note`);
+                            if(nEl) {
+                                nEl.value = chkData.notes[k];
+                                syncNotes(k, chkData.notes[k]);
+                            }
+                        });
+                    }
+                    if(chkData.dates) {
+                        if(chkData.dates.brinks) document.getElementById('brinks-date').value = chkData.dates.brinks;
+                    }
+                    if (chkData.expenses) {
+                        const exp = chkData.expenses;
+                        if (exp.rent !== undefined) document.getElementById('exp-rent').value = exp.rent;
+                        if (exp.salaries !== undefined) document.getElementById('exp-salaries').value = exp.salaries;
+                        if (exp.utilities !== undefined) document.getElementById('exp-utilities').value = exp.utilities;
+                        if (exp.advertising !== undefined) document.getElementById('exp-advertising').value = exp.advertising;
+                        if (exp.marketing !== undefined) document.getElementById('exp-marketing').value = exp.marketing;
+                        if (exp.datadeals !== undefined) document.getElementById('exp-datadeals').value = exp.datadeals;
+                        if (exp.insurance !== undefined) document.getElementById('exp-insurance').value = exp.insurance;
+                        if (exp.garbage !== undefined) document.getElementById('exp-garbage').value = exp.garbage;
+                        if (exp.security !== undefined) document.getElementById('exp-security').value = exp.security;
+                        if (exp.licenses !== undefined) document.getElementById('exp-licenses').value = exp.licenses;
+                    }
                 }
-                if(chkData.notes) {
-                    Object.keys(chkData.notes).forEach(k => {
-                        const nEl = document.getElementById(`${k}-note`);
-                        if(nEl) {
-                            nEl.value = chkData.notes[k];
-                            syncNotes(k, chkData.notes[k]);
-                        }
-                    });
-                }
-                if(chkData.dates) {
-                    if(chkData.dates.brinks) document.getElementById('brinks-date').value = chkData.dates.brinks;
-                }
-                if (chkData.cooh_last_month) {
-                    const el = document.getElementById('cooh-last-month');
-                    if (el) el.value = chkData.cooh_last_month;
-                }
-                if (chkData.brinks_total_deposit) {
-                    const el = document.getElementById('brinks-total-deposit');
-                    if (el) el.value = chkData.brinks_total_deposit;
-                }
-                if (chkData.expenses) {
-                    const exp = chkData.expenses;
-                    ['rent','salaries','utilities','advertising','marketing','datadeals','insurance','garbage','security','licenses'].forEach(k => {
-                        const el = document.getElementById('exp-' + k);
-                        if (el && exp[k] !== undefined) el.value = exp[k];
-                    });
-                }
-                if(data.inventory_data) {
+                if(data.inventory_data && data.inventory_data.headers && data.inventory_data.rows) {
+                    const cleanHeaders = data.inventory_data.headers.filter(h => h && String(h).trim() !== '');
+                    const migratedRows = normalizeInventoryRows(cleanHeaders, data.inventory_data.rows);
                     storeInventoryData[spk] = {
-                        headers: data.inventory_data.headers,
-                        rows: data.inventory_data.rows,
+                        headers: cleanHeaders,
+                        rows: migratedRows,
                         fileName: data.inventory_filename || 'Uploaded_Inventory.csv'
                     };
                 } else {
-                    // Try local inventory backup
-                    try {
-                        const localInv = localStorage.getItem('oz_inventory_' + spk);
-                        if (localInv) {
-                            storeInventoryData[spk] = JSON.parse(localInv);
-                        } else {
-                            delete storeInventoryData[spk];
-                        }
-                    } catch(e) {
-                        delete storeInventoryData[spk];
-                    }
+                    delete storeInventoryData[spk];
                 }
             }
-
-            // Restore parsed financials from local storage
-            try {
-                const localFin = localStorage.getItem('oz_financials_' + spk);
-                if (localFin) parsedFinancials[spk] = JSON.parse(localFin);
-            } catch(e) {}
 
             renderInventoryTable();
             renderStoredFiles();
@@ -1190,49 +1189,50 @@ html_code = """
         }
 
         function processParsedCSV(fields, data, fileName) {
-            const parentRows = data.filter(row => {
-                const cat = row['Category'] || '';
-                return !cat.trim().startsWith('>') && cat.trim() !== '';
-            });
-
-            const sortedRows = [];
-            ACCOUNTANT_ORDER.forEach(targetCat => {
-                if (targetCat === "__SPACER__") {
-                    const spacerRow = { Category: "" };
-                    fields.forEach(f => { if (f !== 'Category') spacerRow[f] = ""; });
-                    sortedRows.push(spacerRow);
-                    return;
-                }
-                const found = parentRows.find(r => (r['Category'] || '').trim().toLowerCase() === targetCat.trim().toLowerCase());
-                if (found) {
-                    const cleanRow = { Category: targetCat };
-                    fields.forEach(f => {
-                        if (f !== 'Category') {
-                            const rawVal = found[f];
-                            const num = parseFloat(String(rawVal || '0').replace(/[^0-9.-]/g, ''));
-                            cleanRow[f] = isNaN(num) ? 0.00 : num;
-                        }
-                    });
-                    sortedRows.push(cleanRow);
-                } else {
-                    const emptyRow = { Category: targetCat };
-                    fields.forEach(f => { if (f !== 'Category') emptyRow[f] = 0.00; });
-                    sortedRows.push(emptyRow);
-                }
-            });
+            const cleanFields = (fields || []).filter(f => f && String(f).trim() !== '');
+            const sortedRows = normalizeInventoryRows(cleanFields, data);
 
             const spk = getSPK();
-            storeInventoryData[spk] = { headers: fields, rows: sortedRows, fileName: fileName };
-
-            try {
-                localStorage.setItem('oz_inventory_' + spk, JSON.stringify(storeInventoryData[spk]));
-            } catch(e) {}
+            storeInventoryData[spk] = { headers: cleanFields, rows: sortedRows, fileName: fileName };
 
             renderInventoryTable();
             showCSVFileInfo(fileName);
             updateFinancialSummary();
 
-            alert('Inventory CSV processed. Table is ready with green header and spacer after Vapes - Pods. Click "Save All" to store permanently.');
+            // Generate styled Excel (.xlsx) and push to Greenline Inventory Summary
+            const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
+            const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
+            const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+
+            fetch('http://127.0.0.1:8513/api/upload_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    store_period_key: spk,
+                    category: 'green1',
+                    filename: formattedFileName,
+                    file_data: base64Data
+                })
+            })
+            .then(r => r.json())
+            .then(resData => {
+                if (resData.success) {
+                    if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                    storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory'));
+                    storedFilesMap[spk]['green1'].push({ id: resData.id, filename: formattedFileName });
+
+                    const green1Chk = document.getElementById('green1-chk');
+                    if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
+
+                    renderStoredFiles();
+                    updateCompletionBadge();
+                    scheduleAutoSave();
+                }
+            })
+            .catch(err => {
+                console.error('Auto-upload error:', err);
+                scheduleAutoSave();
+            });
         }
 
         function renderInventoryTable() {
@@ -1246,33 +1246,40 @@ html_code = """
             const infoBox = document.getElementById('csv-file-info');
 
             if (!inv) {
-                tableHeader.innerHTML = `<th class="p-2 font-semibold" style="background:#065f46;color:white;">Category</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Opening</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Sold</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Closing</th>`;
+                tableHeader.innerHTML = `<th class="p-2 font-semibold bg-emerald-800 text-white">Category</th><th class="p-2 font-semibold bg-emerald-800 text-white">Opening</th><th class="p-2 font-semibold bg-emerald-800 text-white">Sold</th><th class="p-2 font-semibold bg-emerald-800 text-white">Closing</th>`;
                 tableBody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-zinc-400">No report uploaded yet.</td></tr>`;
                 actionArea.classList.add('hidden');
                 invStatusBadge.textContent = "Not Loaded";
                 invStatusBadge.className = "text-[11px] text-zinc-600 bg-white border border-zinc-300 px-2 py-0.5 rounded shadow-xs";
                 portalInvVal.innerHTML = '<span class="text-emerald-200/60">No CSV report uploaded</span>';
                 if(infoBox) infoBox.classList.add('hidden');
+                updateFinancialSummary();
                 return;
             }
 
             const headers = inv.headers;
-            const rows = inv.rows;
+            const rows = normalizeInventoryRows(headers, inv.rows);
+            inv.rows = rows;
+
             const displayHeaders = headers.includes('Opening') ? ['Category', 'Opening', 'Sold', 'Closing'] : [headers[0], headers[1], headers[2]];
 
-            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold" style="background:#065f46;color:white;">${h}</th>`).join('');
-            // Force thead background as well
-            const thead = tableHeader.closest('thead');
-            if (thead) thead.style.background = '#065f46';
-
+            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold bg-emerald-800 text-white">${h}</th>`).join('');
             tableBody.innerHTML = rows.map(row => {
-                const isSpacer = !row.Category || String(row.Category).trim() === '';
-                if (isSpacer) {
-                    return `<tr class="h-4 bg-zinc-100"><td colspan="${displayHeaders.length}"></td></tr>`;
+                if (isBlankSpacerRow(row)) {
+                    return `<tr class="h-7 bg-white"><td colspan="${displayHeaders.length}" class="p-2">&nbsp;</td></tr>`;
                 }
-                return `<tr class="hover:bg-zinc-50 transition-colors">
-                    ${displayHeaders.map(h => `<td class="p-2 ${h === 'Category' ? 'font-medium text-emerald-800' : 'text-zinc-700'}">${row[h] !== undefined ? row[h] : ''}</td>`).join('')}
-                </tr>`;
+                return `
+                    <tr class="hover:bg-zinc-50 transition-colors">
+                        ${displayHeaders.map(h => {
+                            if (h === 'Category') {
+                                return `<td class="p-2 font-medium text-emerald-800">${row[h] !== undefined ? row[h] : ''}</td>`;
+                            }
+                            const val = parseFloat(String(row[h] !== undefined ? row[h] : 0).replace(/[^0-9.-]/g, ''));
+                            const formatted = isNaN(val) ? '0.00' : val.toFixed(2);
+                            return `<td class="p-2 text-right font-mono text-zinc-700">${formatted}</td>`;
+                        }).join('')}
+                    </tr>
+                `;
             }).join('');
 
             actionArea.classList.remove('hidden');
@@ -1283,29 +1290,10 @@ html_code = """
             showCSVFileInfo(inv.fileName);
 
             document.getElementById('download-excel-btn').onclick = function() {
-                const worksheetData = [headers, ...rows.map(row => {
-                    const isSpacer = !row.Category || String(row.Category).trim() === '';
-                    if (isSpacer) return headers.map(() => '');
-                    return headers.map(h => row[h]);
-                })];
-                const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-
-                // Green header style
-                const headerStyle = {
-                    fill: { fgColor: { rgb: "065F46" } },
-                    font: { bold: true, color: { rgb: "FFFFFF" } },
-                    alignment: { horizontal: "center" }
-                };
-                const range = XLSX.utils.decode_range(worksheet['!ref']);
-                for (let C = range.s.c; C <= range.e.c; ++C) {
-                    const cell = worksheet[XLSX.utils.encode_cell({ r: 0, c: C })];
-                    if (cell) cell.s = headerStyle;
-                }
-
-                const workbook = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(workbook, worksheet, `${activeStore} Inventory`);
-                XLSX.writeFile(workbook, `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Report.xlsx`);
+                const wb = buildFormattedWorkbook(headers, rows, `${activeStore} Inventory`);
+                XLSX.writeFile(wb, `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`);
             };
+            updateFinancialSummary();
         }
 
         function showCSVFileInfo(fileName) {
@@ -1321,9 +1309,6 @@ html_code = """
             if (confirm('Are you sure you want to delete this CSV upload?')) {
                 const spk = getSPK();
                 delete storeInventoryData[spk];
-                if(storedFilesMap[spk] && storedFilesMap[spk]['green1']) {
-                    storedFilesMap[spk]['green1'] = storedFilesMap[spk]['green1'].filter(f => !f.filename.includes('_Formatted_Inventory.csv'));
-                }
                 renderInventoryTable();
                 renderStoredFiles();
                 scheduleAutoSave();
@@ -1346,27 +1331,13 @@ html_code = """
         function scheduleAutoSave() {
             if (saveTimeout) clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => {
-                saveLocalOnly();
-            }, 500);
+                saveAllData(true);
+            }, 800);
         }
 
-        function saveLocalOnly() {
+        function saveAllData(isSilent = false) {
             const spk = getSPK();
-            const checklistData = buildChecklistData();
-            try {
-                localStorage.setItem('oz_data_' + spk, JSON.stringify(checklistData));
-            } catch(e) {}
-            const badge = document.getElementById('store-completion-badge');
-            if (badge) {
-                const checked = Object.values(checklistData.checkboxes).filter(Boolean).length;
-                badge.textContent = `✓ Local | Checklist: ${checked}/10`;
-                setTimeout(() => {
-                    badge.textContent = `Checklist: ${checked}/10 Completed`;
-                }, 1500);
-            }
-        }
 
-        function buildChecklistData() {
             const checkboxes = {
                 'brinks': document.getElementById('brinks-chk')?.checked || false,
                 'green1': document.getElementById('green1-chk')?.checked || false,
@@ -1379,6 +1350,7 @@ html_code = """
                 'gas1': document.getElementById('gas1-chk')?.checked || false,
                 'gas2': document.getElementById('gas2-chk')?.checked || false
             };
+
             const notes = {
                 'cooh': document.getElementById('cooh-text')?.value || '',
                 'brinks': document.getElementById('brinks-note')?.value || '',
@@ -1393,12 +1365,12 @@ html_code = """
                 'gas1': document.getElementById('gas1-note')?.value || '',
                 'gas2': document.getElementById('gas2-note')?.value || ''
             };
+
             const dates = {
                 'cooh': document.getElementById('cooh-date')?.value || '',
                 'brinks': document.getElementById('brinks-date')?.value || ''
             };
-            const coohLastMonth = document.getElementById('cooh-last-month')?.value || '';
-            const brinksTotalDeposit = document.getElementById('brinks-total-deposit')?.value || '';
+
             const expenses = {
                 rent: document.getElementById('exp-rent')?.value || '',
                 salaries: document.getElementById('exp-salaries')?.value || '',
@@ -1411,45 +1383,54 @@ html_code = """
                 security: document.getElementById('exp-security')?.value || '',
                 licenses: document.getElementById('exp-licenses')?.value || ''
             };
-            return { checkboxes, notes, dates, cooh_last_month: coohLastMonth, brinks_total_deposit: brinksTotalDeposit, expenses };
-        }
 
-        function saveAllData(isSilent = false) {
-            const spk = getSPK();
-            const checklistData = buildChecklistData();
-
-            // Include inventory so it persists
+            const checklistData = { checkboxes: checkboxes, notes: notes, dates: dates, expenses: expenses };
             const inv = storeInventoryData[spk] || null;
-            const inventoryJson = inv ? JSON.stringify({ headers: inv.headers, rows: inv.rows }) : "";
-            const inventoryFilename = inv ? inv.fileName : "";
+
+            persistentStoreData[spk] = {
+                cooh_text: notes['cooh'],
+                cooh_date: dates['cooh'],
+                chargebacks_text: notes['chargebacks'],
+                checklist_json: checklistData,
+                inventory_data: inv ? { headers: inv.headers, rows: inv.rows } : null,
+                inventory_filename: inv ? inv.fileName : ""
+            };
 
             try {
-                localStorage.setItem('oz_data_' + spk, JSON.stringify(checklistData));
+                localStorage.setItem('oz_data_' + spk, JSON.stringify(persistentStoreData[spk]));
             } catch(e) {}
+
+            fetch('http://127.0.0.1:8513/api/save_checklist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    store_period_key: spk,
+                    cooh_text: notes['cooh'],
+                    cooh_date: dates['cooh'],
+                    chargebacks_text: notes['chargebacks'],
+                    checklist_json: checklistData
+                })
+            }).catch(err => console.error('Save checklist error:', err));
+
+            if (inv) {
+                fetch('http://127.0.0.1:8513/api/save_inventory', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        store_period_key: spk,
+                        inventory_json: { headers: inv.headers, rows: inv.rows },
+                        inventory_filename: inv.fileName
+                    })
+                }).catch(err => console.error('Save inventory error:', err));
+            }
 
             const badge = document.getElementById('store-completion-badge');
             if (badge) {
-                const checked = Object.values(checklistData.checkboxes).filter(Boolean).length;
+                const checked = Object.values(checkboxes).filter(Boolean).length;
                 badge.textContent = isSilent ? `✓ Saved | Checklist: ${checked}/10` : `Saved Successfully! Checklist: ${checked}/10`;
                 setTimeout(() => {
                     badge.textContent = `Checklist: ${checked}/10 Completed`;
                 }, 2000);
-            }
-
-            // Only navigate (full save to database) when explicitly requested
-            if (!isSilent) {
-                const currentUrl = new URL(window.location.href);
-                currentUrl.searchParams.set('action', 'save_checklist');
-                currentUrl.searchParams.set('spk', spk);
-                currentUrl.searchParams.set('cooh_text', checklistData.notes['cooh']);
-                currentUrl.searchParams.set('cooh_date', checklistData.dates['cooh']);
-                currentUrl.searchParams.set('chargebacks', checklistData.notes['chargebacks']);
-                currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
-                if (inventoryJson) {
-                    currentUrl.searchParams.set('inventory_json', inventoryJson);
-                    currentUrl.searchParams.set('inventory_filename', inventoryFilename);
-                }
-                window.location.href = currentUrl.toString();
             }
         }
 
@@ -1486,104 +1467,66 @@ html_code = """
             if(document.getElementById('portal-date-brinks')) document.getElementById('portal-date-brinks').textContent = brinksDate || 'No date';
         }
 
-        let parsedFinancials = {};  // store_period_key -> { sales, cogs, cash, card, etc. }
-
         function handleItemFiles(cat, inputElem) {
             if (inputElem.files && inputElem.files.length > 0) {
                 const spk = getSPK();
-                Array.from(inputElem.files).forEach((file) => {
-                    if (file.name.toLowerCase().endsWith('.csv') && (cat === 'green2' || cat === 'green3')) {
-                        // Parse financial CSVs client-side and extract numbers
-                        Papa.parse(file, {
-                            header: true,
-                            skipEmptyLines: true,
-                            complete: function(results) {
-                                extractFinancialNumbers(spk, cat, results.data, file.name);
-                                // Still attempt the upload
-                                const reader = new FileReader();
-                                reader.onload = function(e) {
-                                    const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
-                                    const currentUrl = new URL(window.location.href);
-                                    currentUrl.searchParams.set('action', 'save_file');
-                                    currentUrl.searchParams.set('spk', spk);
-                                    currentUrl.searchParams.set('category', cat);
-                                    currentUrl.searchParams.set('filename', file.name);
-                                    currentUrl.searchParams.set('file_b64', base64String);
-                                    window.location.href = currentUrl.toString();
-                                };
-                                reader.readAsArrayBuffer(file);
+                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+
+                Array.from(inputElem.files).forEach((file, idx) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+                        fetch('http://127.0.0.1:8513/api/upload_file', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                store_period_key: spk,
+                                category: cat,
+                                filename: file.name,
+                                file_data: base64Data
+                            })
+                        })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success) {
+                                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+                                storedFilesMap[spk][cat].push({ id: data.id, filename: file.name });
+                                renderStoredFiles();
+                                scheduleAutoSave();
                             }
-                        });
-                    } else {
-                        const reader = new FileReader();
-                        reader.onload = function(e) {
-                            const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
-                            const currentUrl = new URL(window.location.href);
-                            currentUrl.searchParams.set('action', 'save_file');
-                            currentUrl.searchParams.set('spk', spk);
-                            currentUrl.searchParams.set('category', cat);
-                            currentUrl.searchParams.set('filename', file.name);
-                            currentUrl.searchParams.set('file_b64', base64String);
-                            window.location.href = currentUrl.toString();
-                        };
-                        reader.readAsArrayBuffer(file);
-                    }
+                        })
+                        .catch(err => console.error('Upload error:', err));
+                    };
+                    reader.readAsArrayBuffer(file);
                 });
                 inputElem.value = '';
             }
         }
 
-        function extractFinancialNumbers(spk, cat, rows, fileName) {
-            if (!parsedFinancials[spk]) parsedFinancials[spk] = {};
-            let sales = 0, cogs = 0, cash = 0, card = 0;
-
-            rows.forEach(row => {
-                // Payment types often have a type column and an amount column
-                const typeKey = Object.keys(row).find(k => k.toLowerCase().includes('type') || k.toLowerCase().includes('payment') || k.toLowerCase().includes('method'));
-                const amountKey = Object.keys(row).find(k => k.toLowerCase().includes('amount') || k.toLowerCase().includes('total') || k.toLowerCase().includes('sales'));
-
-                if (cat === 'green3' && typeKey && amountKey) {
-                    const type = String(row[typeKey] || '').toLowerCase();
-                    const amt = parseFloat(String(row[amountKey] || '').replace(/[^0-9.-]/g, '')) || 0;
-                    if (type.includes('cash')) cash += amt;
-                    else if (type.includes('card') || type.includes('moneris') || type.includes('credit') || type.includes('debit')) card += amt;
-                } else {
-                    Object.keys(row).forEach(key => {
-                        const val = parseFloat(String(row[key] || '').replace(/[^0-9.-]/g, '')) || 0;
-                        const k = key.toLowerCase();
-                        if (k.includes('net sales') || (k.includes('sales') && !k.includes('type'))) sales += val;
-                        if (k.includes('cost') || k.includes('cogs')) cogs += val;
-                        if (k.includes('cash') && !k.includes('type')) cash += val;
-                        if ((k.includes('card') || k.includes('moneris')) && !k.includes('type')) card += val;
-                    });
+        function handleRemoveFile(cat, fileId) {
+            const spk = getSPK();
+            if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
+                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => f.id !== fileId);
+                if (Number.isInteger(fileId)) {
+                    fetch(`http://127.0.0.1:8513/api/delete_file?id=${fileId}`, { method: 'POST' })
+                        .catch(err => console.error('Delete error:', err));
                 }
-            });
-
-            if (cat === 'green2') {
-                if (sales > 0) parsedFinancials[spk].sales = sales;
-                if (cogs > 0) parsedFinancials[spk].cogs = cogs;
-            }
-            if (cat === 'green3') {
-                if (cash > 0) parsedFinancials[spk].cash = cash;
-                if (card > 0) parsedFinancials[spk].card = card;
-            }
-
-            try {
-                localStorage.setItem('oz_financials_' + spk, JSON.stringify(parsedFinancials[spk]));
-            } catch(e) {}
-
-            updateFinancialSummary();
-            alert(`Parsed ${fileName}\\nSales: $${sales.toFixed(0)}\\nCOGS: $${cogs.toFixed(0)}\\nCash: $${cash.toFixed(0)}\\nCard: $${card.toFixed(0)}`);
-        }
-
-        function handleRemoveFile(fileId) {
-            if (confirm(`Are you sure you want to delete this file?`)) {
-                window.location.href = `?action=delete_file&file_id=${fileId}`;
+                renderStoredFiles();
+                scheduleAutoSave();
             }
         }
 
         function clearUploadField(cat) {
-            alert(`To clear category files, click the delete (×) button next to each individual attached file.`);
+            if (confirm(`Clear all files for this category?`)) {
+                const spk = getSPK();
+                if (storedFilesMap[spk]) {
+                    storedFilesMap[spk][cat] = [];
+                }
+                renderStoredFiles();
+                scheduleAutoSave();
+            }
         }
 
         function renderStoredFiles() {
@@ -1600,7 +1543,10 @@ html_code = """
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
                         let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
+                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
+                        if (Number.isInteger(f.id)) {
+                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">⬇</button>`;
+                        }
                         chip += `</span>`;
                         return chip;
                     }).join('');
@@ -1608,7 +1554,10 @@ html_code = """
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
                             let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
+                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
+                            if (Number.isInteger(f.id)) {
+                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">⬇</button>`;
+                            }
                             chip += `</span>`;
                             return chip;
                         }).join('');
@@ -1682,19 +1631,6 @@ html_code = """
             if (confirm(`Are you sure you want to delete user "${username}"?`)) {
                 window.location.href = `?action=delete_user&username=${username}`;
             }
-        }
-
-        function parseNum(val) {
-            return parseFloat(String(val || 0).replace(/[^0-9.-]/g, '')) || 0;
-        }
-
-        function isBlankSpacerRow(row) {
-            if (!row) return true;
-            const cat = row['Category'];
-            if (cat === null || cat === undefined || String(cat).trim() === '' || String(cat).startsWith('---')) {
-                return true;
-            }
-            return false;
         }
 
         function updateFinancialSummary() {
@@ -1785,185 +1721,6 @@ html_code = """
             }
         }
 
-        function showInfographicReport(detailed = false) {
-            const existing = document.getElementById('report-modal');
-            if (existing) existing.remove();
-
-            updateFinancialSummary();
-            const spk = getSPK();
-            const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
-            const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
-            const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
-            const totalSales = document.getElementById('fin-total-sales').textContent;
-            const totalExp = document.getElementById('fin-total-expenses')?.textContent || '$0.00';
-            const net = document.getElementById('fin-net')?.textContent || '$0.00';
-            const margin = document.getElementById('fin-net-margin')?.textContent || '0%';
-            const grossMargin = document.getElementById('fin-gross-margin')?.textContent || '0%';
-            const cogs = document.getElementById('fin-cogs').textContent;
-
-            // Inventory category breakdown
-            const inv = storeInventoryData[spk];
-            let categoryHtml = '<p class="text-emerald-300 text-sm">No inventory data loaded</p>';
-            if (inv && inv.rows && inv.rows.length) {
-                const maxSold = Math.max(...inv.rows.map(r => parseNum(r.Sold || r.sold)), 1);
-                categoryHtml = inv.rows.slice(0, 12).map(r => {
-                    const sold = parseNum(r.Sold || r.sold);
-                    const pct = (sold / maxSold * 100).toFixed(0);
-                    return `<div style="margin-bottom:6px;">
-                        <div style="display:flex;justify-content:space-between;font-size:12px;">
-                            <span>${r.Category || 'Category'}</span>
-                            <span>$${sold.toLocaleString(undefined, {minimumFractionDigits:0})}</span>
-                        </div>
-                        <div style="background:#065f46;height:6px;border-radius:3px;overflow:hidden;">
-                            <div style="background:#34d399;height:100%;width:${pct}%;"></div>
-                        </div>
-                    </div>`;
-                }).join('');
-            }
-
-            const expenseItems = [
-                ['Rent', document.getElementById('exp-rent')?.value],
-                ['Salaries', document.getElementById('exp-salaries')?.value],
-                ['Utilities', document.getElementById('exp-utilities')?.value],
-                ['Advertising', document.getElementById('exp-advertising')?.value],
-                ['Marketing', document.getElementById('exp-marketing')?.value],
-                ['Data Deals', document.getElementById('exp-datadeals')?.value],
-                ['Insurance', document.getElementById('exp-insurance')?.value],
-                ['Garbage', document.getElementById('exp-garbage')?.value],
-                ['Security', document.getElementById('exp-security')?.value],
-                ['Licenses', document.getElementById('exp-licenses')?.value]
-            ];
-            const expenseHtml = expenseItems.map(([label, val]) => 
-                `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #065f46;">
-                    <span style="color:#a7f3d0;">${label}</span>
-                    <span>$${parseNum(val).toLocaleString(undefined, {minimumFractionDigits:2})}</span>
-                </div>`
-            ).join('');
-
-            const modal = document.createElement('div');
-            modal.id = 'report-modal';
-            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
-            modal.innerHTML = `
-                <div style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:900px;width:100%;max-height:92vh;overflow:auto;color:white;padding:24px;">
-                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
-                        <div>
-                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">Business Health Dashboard</h2>
-                            <p style="margin:4px 0 0;font-size:14px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
-                        </div>
-                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">×</button>
-                    </div>
-
-                    <!-- Cash Consolidation (calculated from all sources) -->
-                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Cash Consolidation</h3>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div>
-                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${cooh}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">End of Last Month</div>
-                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${coohLast}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div>
-                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${brinksDep}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Cash (Payment Types)</div>
-                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${parsedFinancials[spk] && parsedFinancials[spk].cash ? '$' + parsedFinancials[spk].cash.toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Card (Payment Types)</div>
-                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${parsedFinancials[spk] && parsedFinancials[spk].card ? '$' + parsedFinancials[spk].card.toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</div>
-                        </div>
-                    </div>
-                    <div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:20px;text-align:center;">
-                        <div style="font-size:12px;color:#6ee7b7;margin-bottom:4px;">Calculated Cash Position</div>
-                        <div style="font-size:13px;color:#a7f3d0;margin-bottom:6px;">End of Last Month + Cash Sales − Brinks Deposits</div>
-                        <div style="font-size:22px;font-weight:bold;color:#34d399;">
-                            $${(parseNum(coohLast) + (parsedFinancials[spk]?.cash || 0) - parseNum(brinksDep)).toLocaleString(undefined, {minimumFractionDigits:2})}
-                        </div>
-                        <div style="font-size:12px;color:#a7f3d0;margin-top:4px;">
-                            Variance vs Actual Cash on Hand: $${(parseNum(cooh) - (parseNum(coohLast) + (parsedFinancials[spk]?.cash || 0) - parseNum(brinksDep))).toLocaleString(undefined, {minimumFractionDigits:2})}
-                        </div>
-                    </div>
-
-                    <!-- Profitability -->
-                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Profitability</h3>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Total Sales</div>
-                            <div style="font-size:18px;font-weight:bold;">${totalSales}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">COGS</div>
-                            <div style="font-size:18px;font-weight:bold;">${cogs}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Gross Profit</div>
-                            <div style="font-size:18px;font-weight:bold;">${gross}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Gross Margin</div>
-                            <div style="font-size:18px;font-weight:bold;color:#34d399;">${grossMargin}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Net Profit</div>
-                            <div style="font-size:18px;font-weight:bold;">${net}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
-                            <div style="font-size:11px;color:#6ee7b7;">Net Margin</div>
-                            <div style="font-size:18px;font-weight:bold;color:#34d399;">${margin}</div>
-                        </div>
-                    </div>
-
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
-                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
-                            ${expenseHtml}
-                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:6px;border-top:1px solid #065f46;font-size:13px;">
-                                <span>Total Expenses</span><span>${totalExp}</span>
-                            </div>
-                        </div>
-                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
-                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Sales by Category</h3>
-                            ${categoryHtml}
-                        </div>
-                    </div>
-
-                    <div style="margin-top:12px;text-align:right;">
-                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print / Save PDF</button>
-                        <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(modal);
-
-            const closeModal = () => {
-                const m = document.getElementById('report-modal');
-                if (m) m.remove();
-            };
-            document.getElementById('close-report-x').onclick = closeModal;
-            document.getElementById('close-report-btn').onclick = closeModal;
-            document.getElementById('print-report').onclick = () => window.print();
-            modal.onclick = (e) => { if (e.target === modal) closeModal(); };
-        }
-
-        function generateReport() {
-            showInfographicReport(false);
-        }
-
-        function generateDetailedReport() {
-            showInfographicReport(true);
-        }
-
-        // Call financial update whenever relevant data changes
-        const origSchedule = scheduleAutoSave;
-        scheduleAutoSave = function() {
-            origSchedule();
-            updateFinancialSummary();
-        };
-
         initApp();
     </script>
 </body>
@@ -1972,15 +1729,15 @@ html_code = """
 
 # Safe string replacement for variables
 final_html = (
-    html_code.replace("__CURRENT_NAME__", current_name)
-    .replace("__CURRENT_ROLE__", current_role)
-    .replace("__ADMIN_HIDDEN_CLASS__", admin_hidden_class)
-    .replace("__CRED_TABLE_ROWS__", cred_table_rows)
-    .replace("__ACCOUNTANT_HIDDEN_CLASS__", accountant_hidden_class)
-    .replace("__ADD_USER_BTN_HTML__", add_user_btn_html)
-    .replace("__IS_STORE_MANAGER__", is_store_manager)
-    .replace("__FILES_JSON__", files_json)
-    .replace("__STORE_DATA_JSON__", store_data_json)
+    html_code.replace("REPLACE_CURRENT_NAME", current_name)
+    .replace("REPLACE_CURRENT_ROLE", current_role)
+    .replace("REPLACE_ADMIN_HIDDEN_CLASS", admin_hidden_class)
+    .replace("REPLACE_CRED_TABLE_ROWS", cred_table_rows)
+    .replace("REPLACE_ACCOUNTANT_HIDDEN_CLASS", accountant_hidden_class)
+    .replace("REPLACE_ADD_USER_BTN_HTML", add_user_btn_html)
+    .replace("REPLACE_IS_STORE_MANAGER", is_store_manager)
+    .replace("REPLACE_FILES_JSON", files_json)
+    .replace("REPLACE_STORE_DATA_JSON", store_data_json)
 )
 
 components.html(final_html, height=3000, scrolling=True)
