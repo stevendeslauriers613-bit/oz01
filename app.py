@@ -14,35 +14,37 @@ import streamlit.components.v1 as components
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-# --- DIRECT HARDCODED DROPBOX CREDENTIALS ---
-DROPBOX_APP_KEY = "blkc7dhojszn2tq"
-DROPBOX_APP_SECRET = "cvw2dfuj7mvzfqo"
+# --- DROPBOX CREDENTIALS (prefer Streamlit secrets) ---
 DROPBOX_FOLDER_PATH = "/OZ_Store_Uploads"
 
-
 def get_dropbox_client():
-    """Get authenticated Dropbox client using hardcoded app credentials or saved refresh token."""
+    """Get authenticated Dropbox client using Streamlit secrets or local fallback."""
     try:
         import dropbox
-        # Try loading from local credentials file if present
-        refresh_token = None
-        if os.path.exists("dropbox_credentials.json"):
+
+        # Prefer Streamlit secrets (works on Streamlit Cloud)
+        app_key = st.secrets.get("DROPBOX_APP_KEY", "blkc7dhojszn2tq")
+        app_secret = st.secrets.get("DROPBOX_APP_SECRET", "cvw2dfuj7mvzfqo")
+        refresh_token = st.secrets.get("DROPBOX_REFRESH_TOKEN", None)
+
+        # Local fallback: dropbox_credentials.json
+        if not refresh_token and os.path.exists("dropbox_credentials.json"):
             with open("dropbox_credentials.json", "r") as f:
                 creds = json.load(f)
                 refresh_token = creds.get("refresh_token")
 
-        if DROPBOX_APP_KEY and DROPBOX_APP_SECRET and refresh_token:
+        if app_key and app_secret and refresh_token:
             return dropbox.Dropbox(
-                app_key=DROPBOX_APP_KEY,
-                app_secret=DROPBOX_APP_SECRET,
+                app_key=app_key,
+                app_secret=app_secret,
                 oauth2_refresh_token=refresh_token
             )
-        
-        # Fallback to direct app generation or basic client if available
-        return dropbox.Dropbox(app_key=DROPBOX_APP_KEY, app_secret=DROPBOX_APP_SECRET)
+
+        print("Dropbox: missing refresh token. Add DROPBOX_REFRESH_TOKEN to Streamlit secrets.")
+        return None
     except Exception as e:
         print("Dropbox init error:", e)
-    return None
+        return None
 
 
 def ensure_dropbox_folder(dbx):
