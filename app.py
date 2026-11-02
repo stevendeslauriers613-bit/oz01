@@ -24,6 +24,20 @@ def get_dropbox_client():
     """Get authenticated Dropbox client."""
     try:
         import dropbox
+        # Prefer Streamlit secrets
+        try:
+            app_key = st.secrets.get("DROPBOX_APP_KEY", "blkc7dhojszn2tq")
+            app_secret = st.secrets.get("DROPBOX_APP_SECRET", "cvw2dfuj7mvzfqo")
+            refresh_token = st.secrets.get("DROPBOX_REFRESH_TOKEN")
+            if refresh_token:
+                return dropbox.Dropbox(
+                    app_key=app_key,
+                    app_secret=app_secret,
+                    oauth2_refresh_token=refresh_token
+                )
+        except Exception:
+            pass
+        # Fallback to local credentials file
         if not os.path.exists(DROPBOX_CREDENTIALS_FILE):
             return None
         with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
@@ -52,7 +66,7 @@ def upload_to_dropbox(dbx, filename, file_data):
 # Set page configuration
 st.set_page_config(
     page_title="The OZ Store - Persistent Accountant Package Manager",
-    page_icon="🌿",
+    page_icon="ðŸŒ¿",
     layout="wide",
 )
 
@@ -135,6 +149,51 @@ if "action" in query_params:
         username = query_params.get("username", "").lower().strip()
         if username:
             cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+            conn.commit()
+
+    elif action == "save_file":
+        spk = query_params.get("spk", "")
+        category = query_params.get("category", "")
+        filename = query_params.get("filename", "")
+        file_b64 = query_params.get("file_b64", "")
+        if spk and category and filename and file_b64:
+            try:
+                file_data = base64.b64decode(file_b64)
+                dbx = get_dropbox_client()
+                if dbx:
+                    ensure_dropbox_folder(dbx)
+                    dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{category}/{filename}"
+                    dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+                    filepath = f"dropbox://{dropbox_path}"
+                else:
+                    os.makedirs(f"{UPLOAD_DIR}/{spk}/{category}", exist_ok=True)
+                    filepath = f"{UPLOAD_DIR}/{spk}/{category}/{filename}"
+                    with open(filepath, "wb") as f:
+                        f.write(file_data)
+                cursor.execute(
+                    "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+                    (spk, category, filename, filepath)
+                )
+                conn.commit()
+            except Exception as e:
+                st.error(f"File save error: {e}")
+
+    elif action == "save_checklist":
+        spk = query_params.get("spk", "")
+        cooh_text = query_params.get("cooh_text", "")
+        cooh_date = query_params.get("cooh_date", "")
+        chargebacks = query_params.get("chargebacks", "")
+        checklist_json = query_params.get("checklist_json", "{}")
+        inventory_json = query_params.get("inventory_json", "")
+        inventory_filename = query_params.get("inventory_filename", "")
+        if spk:
+            cursor.execute(
+                """INSERT OR REPLACE INTO store_data 
+                   (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json, inventory_json, inventory_filename) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (spk, cooh_text, cooh_date, chargebacks, checklist_json, 
+                 inventory_json if inventory_json else None, inventory_filename)
+            )
             conn.commit()
 
     elif action == "delete_file":
@@ -231,7 +290,7 @@ if not st.session_state.logged_in:
         st.markdown(
             """
             <div style="background-color: #065f46; padding: 30px; border-radius: 16px; color: white; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
-                <div style="font-size: 40px; margin-bottom: 10px;">🌿</div>
+                <div style="font-size: 40px; margin-bottom: 10px;">ðŸŒ¿</div>
                 <h2 style="margin: 0; font-size: 22px;">The OZ Store Portal</h2>
                 <p style="font-size: 12px; color: #a7f3d0; margin-top: 5px;">Secure Persistent Database Manager</p>
             </div>
@@ -355,7 +414,7 @@ html_code = """
         <header class="bg-emerald-800 text-white p-6 md:p-8 flex flex-col md:flex-row justify-between items-center gap-4 border-b border-emerald-900">
             <div class="flex items-center gap-4">
                 <div class="bg-white p-2.5 rounded-xl shadow-md flex items-center justify-center">
-                    <span class="text-2xl">🌿</span>
+                    <span class="text-2xl">ðŸŒ¿</span>
                 </div>
                 <div>
                     <h1 class="text-xl md:text-2xl font-extrabold text-white tracking-tight">The OZ Store</h1>
@@ -400,7 +459,7 @@ html_code = """
                 <div class="flex items-center gap-3">
                     REPLACE_ADD_USER_BTN_HTML
                     <div class="text-xs text-zinc-500 font-medium bg-zinc-50 px-3 py-1.5 rounded-lg border border-zinc-200">
-                        👤 Logged in as: <span class="font-bold text-emerald-800">REPLACE_CURRENT_NAME</span>
+                        ðŸ‘¤ Logged in as: <span class="font-bold text-emerald-800">REPLACE_CURRENT_NAME</span>
                     </div>
                 </div>
             </div>
@@ -408,7 +467,7 @@ html_code = """
             <!-- COLLAPSIBLE CREDENTIAL MANAGER (ADMIN ONLY) -->
             <details id="credential-manager-view" class="REPLACE_ADMIN_HIDDEN_CLASS mb-8 bg-zinc-50 rounded-2xl border border-zinc-300 shadow-xs overflow-hidden">
                 <summary class="p-4 bg-emerald-50 hover:bg-emerald-100 cursor-pointer font-bold text-emerald-900 text-xs flex items-center justify-between transition">
-                    <span class="flex items-center gap-2"><span>🔐</span> Employee & Store Login Credentials Directory (Click to Edit)</span>
+                    <span class="flex items-center gap-2"><span>ðŸ”</span> Employee & Store Login Credentials Directory (Click to Edit)</span>
                     <span class="text-[11px] text-emerald-700 underline font-normal">Expand / Collapse</span>
                 </summary>
                 <div class="p-5 border-t border-zinc-200 bg-white space-y-4">
@@ -469,7 +528,7 @@ html_code = """
                 </div>
                 <div class="flex items-center gap-3 text-xs text-zinc-600">
                     <button type="button" onclick="saveAllData()" class="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-1.5 rounded-full font-semibold shadow-xs border border-emerald-600 transition cursor-pointer">
-                        💾 Save All
+                        ðŸ’¾ Save All
                     </button>
                     <span id="active-period-label" class="bg-white text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full font-semibold shadow-xs">October 2026</span>
                     <span id="store-completion-badge" class="bg-amber-50 text-amber-800 border border-amber-300 px-3 py-1 rounded-full font-semibold shadow-xs">Checklist: 0/10 Completed</span>
@@ -498,11 +557,11 @@ html_code = """
                         </div>
                         <div id="csv-file-info" class="hidden mb-4 bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center justify-between">
                             <div class="flex items-center gap-2">
-                                <span class="text-emerald-700">📄</span>
+                                <span class="text-emerald-700">ðŸ“„</span>
                                 <span id="csv-file-name" class="text-xs font-medium text-emerald-800"></span>
                             </div>
                             <button type="button" onclick="clearCSVUpload()" class="bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold px-3 py-1.5 rounded-lg border border-red-300 transition">
-                                🗑️ Delete & Re-upload
+                                ðŸ—‘ï¸ Delete & Re-upload
                             </button>
                         </div>
 
@@ -540,12 +599,18 @@ html_code = """
                                     <input type="date" id="cooh-date" onchange="scheduleAutoSave()" class="bg-white text-zinc-700 text-[11px] px-2 py-1 rounded border border-zinc-300">
                                 </div>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    <input type="text" id="cooh-text" placeholder="Enter amount e.g. $24,521.10" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                    <div class="space-y-2">
+                                        <input type="text" id="cooh-text" placeholder="End of day, e.g. $24,521.10" oninput="syncNotes('cooh', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                        <div>
+                                            <label class="block text-xs font-bold text-emerald-800 mb-1">Cash On Hand - End of Last Month</label>
+                                            <input type="text" id="cooh-last-month" placeholder="e.g. $22,150.00" oninput="scheduleAutoSave()" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                        </div>
+                                    </div>
                                     <div class="flex flex-col gap-1">
                                         <input type="file" id="cooh-file" multiple onchange="handleItemFiles('cooh', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('cooh-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">📎 Browse & Upload Document</button>
-                                            <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('cooh-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">ðŸ“Ž Browse & Upload Document</button>
+                                            <button type="button" onclick="clearUploadField('cooh')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                 </div>
@@ -561,13 +626,17 @@ html_code = """
                                     <input type="date" id="brinks-date" onchange="scheduleAutoSave()" class="bg-white text-zinc-700 text-[11px] px-2 py-1 rounded border border-zinc-300">
                                 </div>
                                 <div class="pl-5 space-y-2">
+                                    <div>
+                                        <label class="block text-xs font-bold text-emerald-800 mb-1">Total Brinks Deposit</label>
+                                        <input type="text" id="brinks-total-deposit" placeholder="e.g. $18,450.00" oninput="markChecklistItem('brinks'); scheduleAutoSave()" class="w-full bg-white border border-emerald-400 rounded-lg px-3 py-2 text-xs text-zinc-800">
+                                    </div>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                                         <input type="text" id="brinks-note" placeholder="Add notes..." oninput="syncNotes('brinks', this.value)" class="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-800">
                                         <div class="flex flex-col gap-1">
                                             <input type="file" id="brinks-file" multiple onchange="handleItemFiles('brinks', this)" class="hidden">
                                             <div class="flex gap-1">
-                                                <button type="button" onclick="document.getElementById('brinks-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">📎 Browse & Upload Photos</button>
-                                                <button type="button" onclick="clearUploadField('brinks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                                <button type="button" onclick="document.getElementById('brinks-file').click()" class="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium py-2 px-3 rounded-lg border border-emerald-300 transition truncate">ðŸ“Ž Browse & Upload Photos</button>
+                                                <button type="button" onclick="clearUploadField('brinks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-2 rounded-lg border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                             </div>
                                         </div>
                                     </div>
@@ -583,8 +652,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="green1-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Inventory Summary (Auto-pushed from Formatter)</label>
                                         <input type="file" id="green1-file" multiple onchange="handleItemFiles('green1', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('green1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('green1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('green1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('green1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-green1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -594,8 +663,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="green2-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Financials</label>
                                         <input type="file" id="green2-file" multiple onchange="handleItemFiles('green2', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('green2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('green2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('green2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('green2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-green2" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -605,8 +674,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="green3-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Payment Types</label>
                                         <input type="file" id="green3-file" multiple onchange="handleItemFiles('green3', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('green3-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('green3')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('green3-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('green3')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-green3" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -622,8 +691,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="mon1-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Counter Sales</label>
                                         <input type="file" id="mon1-file" multiple onchange="handleItemFiles('mon1', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('mon1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('mon1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('mon1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('mon1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-mon1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -633,8 +702,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="mon2-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Online Sales</label>
                                         <input type="file" id="mon2-file" multiple onchange="handleItemFiles('mon2', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('mon2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('mon2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('mon2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('mon2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-mon2" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -650,8 +719,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="ocs1-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Account Statement</label>
                                         <input type="file" id="ocs1-file" multiple onchange="handleItemFiles('ocs1', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('ocs1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('ocs1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('ocs1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('ocs1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-ocs1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -661,8 +730,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="ocs2-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Invoices</label>
                                         <input type="file" id="ocs2-file" multiple onchange="handleItemFiles('ocs2', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('ocs2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('ocs2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('ocs2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('ocs2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-ocs2" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -678,8 +747,8 @@ html_code = """
                                     <div class="flex flex-col gap-1">
                                         <input type="file" id="chargebacks-file" multiple onchange="handleItemFiles('chargebacks', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('chargebacks-file').click()" class="flex-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-medium py-1.5 px-3 rounded-lg border border-zinc-300 transition truncate">📎 Browse & Upload</button>
-                                            <button type="button" onclick="clearUploadField('chargebacks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-1.5 rounded-lg border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('chargebacks-file').click()" class="flex-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-medium py-1.5 px-3 rounded-lg border border-zinc-300 transition truncate">ðŸ“Ž Browse & Upload</button>
+                                            <button type="button" onclick="clearUploadField('chargebacks')" class="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-2 py-1.5 rounded-lg border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                 </div>
@@ -694,8 +763,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="gas1-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Details Report</label>
                                         <input type="file" id="gas1-file" multiple onchange="handleItemFiles('gas1', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('gas1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('gas1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-gas1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -705,8 +774,8 @@ html_code = """
                                         <label class="text-xs font-medium flex items-center gap-1.5"><input type="checkbox" id="gas2-chk" onchange="updateCompletionBadge(); scheduleAutoSave();"> Summary Report</label>
                                         <input type="file" id="gas2-file" multiple onchange="handleItemFiles('gas2', this)" class="hidden">
                                         <div class="flex gap-1">
-                                            <button type="button" onclick="document.getElementById('gas2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('gas2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="document.getElementById('gas2-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">ðŸ“Ž Browse</button>
+                                            <button type="button" onclick="clearUploadField('gas2')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">ðŸ—‘ï¸</button>
                                         </div>
                                     </div>
                                     <div id="files-gas2" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -725,11 +794,17 @@ html_code = """
                 <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 pb-3 border-b border-emerald-800 gap-3">
                     <div>
                         <h3 class="text-lg font-bold text-emerald-300">Accountant Review Portal & Monthly Record Viewer</h3>
-                        <p class="text-emerald-200/80 text-xs mt-0.5">Accountant view for <span id="portal-store-label" class="text-white font-semibold">Oz 1</span> – <span id="portal-period-label" class="text-white font-semibold">October 2026</span></p>
+                        <p class="text-emerald-200/80 text-xs mt-0.5">Accountant view for <span id="portal-store-label" class="text-white font-semibold">Oz 1</span> â€“ <span id="portal-period-label" class="text-white font-semibold">October 2026</span></p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button onclick="generateReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Report
+                        </button>
+                        <button onclick="generateDetailedReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Detailed Report
+                        </button>
                         <button onclick="downloadMasterZip()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-500 transition">
-                            📦 Download All as ZIP
+                            ðŸ“¦ Download All as ZIP
                         </button>
                         <button onclick="window.print()" class="bg-emerald-900 hover:bg-emerald-800 text-emerald-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-700 transition">
                             Print / Save PDF Summary
@@ -764,7 +839,7 @@ html_code = """
                             </tr>
                         </thead>
                         <tbody id="portal-table-body" class="divide-y divide-emerald-800/60 text-emerald-100">
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Cash On Hand - End of Day</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-cooh">No date</td><td class="p-3" id="table-files-cooh">No files</td><td class="p-3 text-emerald-100" id="note-cooh">Not entered</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Cash On Hand - End of Day</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered âœ“</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-cooh">No date</td><td class="p-3" id="table-files-cooh">No files</td><td class="p-3 text-emerald-100" id="note-cooh">Not entered</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Brinks Book (Photos highlighted)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-brinks">Pending</span></td><td class="p-3 text-emerald-300/50 italic" id="portal-date-brinks">No date</td><td class="p-3" id="table-files-brinks">No files</td><td class="p-3 text-emerald-100" id="note-brinks">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Inventory Summary</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green1">No files</td><td class="p-3 text-emerald-100" id="note-green1">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Greenline: Financials</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-green2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-green2">No files</td><td class="p-3 text-emerald-100" id="note-green2">No notes</td></tr>
@@ -773,7 +848,7 @@ html_code = """
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris: Online Sales Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-mon2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-mon2">No files</td><td class="p-3 text-emerald-100" id="note-mon2">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Account Statement</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs1">No files</td><td class="p-3 text-emerald-100" id="note-ocs1">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">OCS: Invoices (Multiple)</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-ocs2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-ocs2">No files</td><td class="p-3 text-emerald-100" id="note-ocs2">No notes</td></tr>
-                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris Chargebacks</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered ✓</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-chargebacks">No files</td><td class="p-3 text-emerald-100" id="note-chargebacks">Nothing to report.</td></tr>
+                            <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Moneris Chargebacks</td><td class="p-3"><span class="bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]">Entered âœ“</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-chargebacks">No files</td><td class="p-3 text-emerald-100" id="note-chargebacks">Nothing to report.</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Details Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas1">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas1">No files</td><td class="p-3 text-emerald-100" id="note-gas1">No notes</td></tr>
                             <tr class="hover:bg-emerald-900/30"><td class="p-3 font-medium text-white">Gas Cards: Summary Report</td><td class="p-3"><span class="bg-emerald-900 text-emerald-300/60 px-2 py-0.5 rounded text-[11px]" id="status-gas2">Pending</span></td><td class="p-3 text-emerald-300/50 italic">No date</td><td class="p-3" id="table-files-gas2">No files</td><td class="p-3 text-emerald-100" id="note-gas2">No notes</td></tr>
                         </tbody>
@@ -1078,6 +1153,10 @@ html_code = """
             document.getElementById('cooh-text').value = "";
             document.getElementById('cooh-date').value = "";
             document.getElementById('brinks-date').value = "";
+            const lastMonthEl = document.getElementById('cooh-last-month');
+            if (lastMonthEl) lastMonthEl.value = "";
+            const brinksDepEl = document.getElementById('brinks-total-deposit');
+            if (brinksDepEl) brinksDepEl.value = "";
             document.getElementById('chargebacks-text').value = "Nothing to report.";
 
             const checkboxes = ['brinks', 'green1', 'green2', 'green3', 'mon1', 'mon2', 'ocs1', 'ocs2', 'gas1', 'gas2'];
@@ -1089,11 +1168,21 @@ html_code = """
             });
 
             let data = persistentStoreData[spk];
-            if (!data) {
-                try {
-                    const local = localStorage.getItem('oz_data_' + spk);
-                    if(local) data = JSON.parse(local);
-                } catch(e) {}
+            let localData = null;
+            try {
+                const local = localStorage.getItem('oz_data_' + spk);
+                if (local) localData = JSON.parse(local);
+            } catch(e) {}
+            if (!data) data = localData;
+            else if (localData && localData.checklist_json) {
+                data.checklist_json = Object.assign({}, data.checklist_json || {}, localData.checklist_json);
+                if (localData.cooh_text) data.cooh_text = localData.cooh_text;
+                if (localData.cooh_date) data.cooh_date = localData.cooh_date;
+                if (localData.chargebacks_text) data.chargebacks_text = localData.chargebacks_text;
+                if (localData.inventory_data) {
+                    data.inventory_data = localData.inventory_data;
+                    data.inventory_filename = localData.inventory_filename;
+                }
             }
 
             if (data) {
@@ -1139,6 +1228,8 @@ html_code = """
                         if (exp.security !== undefined) document.getElementById('exp-security').value = exp.security;
                         if (exp.licenses !== undefined) document.getElementById('exp-licenses').value = exp.licenses;
                     }
+                    if (chkData.cooh_last_month !== undefined && lastMonthEl) lastMonthEl.value = chkData.cooh_last_month;
+                    if (chkData.brinks_total_deposit !== undefined && brinksDepEl) brinksDepEl.value = chkData.brinks_total_deposit;
                 }
                 if(data.inventory_data && data.inventory_data.headers && data.inventory_data.rows) {
                     const cleanHeaders = data.inventory_data.headers.filter(h => h && String(h).trim() !== '');
@@ -1199,40 +1290,26 @@ html_code = """
             showCSVFileInfo(fileName);
             updateFinancialSummary();
 
-            // Generate styled Excel (.xlsx) and push to Greenline Inventory Summary
+            const green1Chk = document.getElementById('green1-chk');
+            if (green1Chk) green1Chk.checked = true;
+            updateCompletionBadge();
+            saveAllData(true);
+
             const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
             const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
 
-            fetch('http://127.0.0.1:8513/api/upload_file', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    store_period_key: spk,
-                    category: 'green1',
-                    filename: formattedFileName,
-                    file_data: base64Data
-                })
-            })
-            .then(r => r.json())
-            .then(resData => {
-                if (resData.success) {
-                    if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                    storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory'));
-                    storedFilesMap[spk]['green1'].push({ id: resData.id, filename: formattedFileName });
+            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+            storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !String(f.filename).includes('_Formatted_Inventory'));
+            storedFilesMap[spk]['green1'].push({ id: 'local-formatted', filename: formattedFileName });
 
-                    const green1Chk = document.getElementById('green1-chk');
-                    if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
-
-                    renderStoredFiles();
-                    updateCompletionBadge();
-                    scheduleAutoSave();
-                }
-            })
-            .catch(err => {
-                console.error('Auto-upload error:', err);
-                scheduleAutoSave();
-            });
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.set('action', 'save_file');
+            currentUrl.searchParams.set('spk', spk);
+            currentUrl.searchParams.set('category', 'green1');
+            currentUrl.searchParams.set('filename', formattedFileName);
+            currentUrl.searchParams.set('file_b64', base64Data);
+            window.location.href = currentUrl.toString();
         }
 
         function renderInventoryTable() {
@@ -1285,7 +1362,7 @@ html_code = """
             actionArea.classList.remove('hidden');
             invStatusBadge.textContent = `Loaded (${inv.fileName})`;
             invStatusBadge.className = "text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded";
-            portalInvVal.innerHTML = `<span class="text-emerald-300 font-semibold">✓ Ready (${inv.fileName})</span>`;
+            portalInvVal.innerHTML = `<span class="text-emerald-300 font-semibold">âœ“ Ready (${inv.fileName})</span>`;
 
             showCSVFileInfo(inv.fileName);
 
@@ -1315,6 +1392,14 @@ html_code = """
             }
         }
 
+        function markChecklistItem(key) {
+            const chk = document.getElementById(`${key}-chk`);
+            if (chk && !chk.checked) {
+                chk.checked = true;
+                updateCompletionBadge();
+            }
+        }
+
         let saveTimeout = null;
         function syncNotes(key, val) {
             const noteCell = document.getElementById(`note-${key}`);
@@ -1325,6 +1410,7 @@ html_code = """
                 const coohValCell = document.getElementById('portal-cooh-val');
                 if (coohValCell) coohValCell.textContent = val.trim() !== '' ? val : 'Not entered';
             }
+            if (val && String(val).trim() !== '') markChecklistItem(key);
             scheduleAutoSave();
         }
 
@@ -1384,7 +1470,14 @@ html_code = """
                 licenses: document.getElementById('exp-licenses')?.value || ''
             };
 
-            const checklistData = { checkboxes: checkboxes, notes: notes, dates: dates, expenses: expenses };
+            const checklistData = {
+                checkboxes: checkboxes,
+                notes: notes,
+                dates: dates,
+                expenses: expenses,
+                cooh_last_month: document.getElementById('cooh-last-month')?.value || '',
+                brinks_total_deposit: document.getElementById('brinks-total-deposit')?.value || ''
+            };
             const inv = storeInventoryData[spk] || null;
 
             persistentStoreData[spk] = {
@@ -1400,38 +1493,29 @@ html_code = """
                 localStorage.setItem('oz_data_' + spk, JSON.stringify(persistentStoreData[spk]));
             } catch(e) {}
 
-            fetch('http://127.0.0.1:8513/api/save_checklist', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    store_period_key: spk,
-                    cooh_text: notes['cooh'],
-                    cooh_date: dates['cooh'],
-                    chargebacks_text: notes['chargebacks'],
-                    checklist_json: checklistData
-                })
-            }).catch(err => console.error('Save checklist error:', err));
-
-            if (inv) {
-                fetch('http://127.0.0.1:8513/api/save_inventory', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        store_period_key: spk,
-                        inventory_json: { headers: inv.headers, rows: inv.rows },
-                        inventory_filename: inv.fileName
-                    })
-                }).catch(err => console.error('Save inventory error:', err));
-            }
-
             const badge = document.getElementById('store-completion-badge');
             if (badge) {
                 const checked = Object.values(checkboxes).filter(Boolean).length;
-                badge.textContent = isSilent ? `✓ Saved | Checklist: ${checked}/10` : `Saved Successfully! Checklist: ${checked}/10`;
+                badge.textContent = isSilent ? `âœ“ Saved | Checklist: ${checked}/10` : `Saved Successfully! Checklist: ${checked}/10`;
                 setTimeout(() => {
                     badge.textContent = `Checklist: ${checked}/10 Completed`;
                 }, 2000);
             }
+
+            if (isSilent) return;
+
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.set('action', 'save_checklist');
+            currentUrl.searchParams.set('spk', spk);
+            currentUrl.searchParams.set('cooh_text', notes['cooh']);
+            currentUrl.searchParams.set('cooh_date', dates['cooh']);
+            currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
+            currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
+            if (inv) {
+                currentUrl.searchParams.set('inventory_json', JSON.stringify({ headers: inv.headers, rows: inv.rows }));
+                currentUrl.searchParams.set('inventory_filename', inv.fileName);
+            }
+            window.location.href = currentUrl.toString();
         }
 
         function updateCompletionBadge() {
@@ -1443,7 +1527,7 @@ html_code = """
                     checked++;
                     const statusEl = document.getElementById(`status-${key}`);
                     if(statusEl) {
-                        statusEl.textContent = "Complete ✓";
+                        statusEl.textContent = "Complete âœ“";
                         statusEl.className = "bg-emerald-800 text-emerald-200 px-2 py-0.5 rounded text-[11px]";
                     }
                 } else {
@@ -1470,36 +1554,39 @@ html_code = """
         function handleItemFiles(cat, inputElem) {
             if (inputElem.files && inputElem.files.length > 0) {
                 const spk = getSPK();
+                markChecklistItem(cat);
+                saveAllData(true);
                 if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
                 if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
 
-                Array.from(inputElem.files).forEach((file, idx) => {
+                const uploadFile = (file) => {
                     const reader = new FileReader();
                     reader.onload = function(e) {
                         const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-                        fetch('http://127.0.0.1:8513/api/upload_file', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({
-                                store_period_key: spk,
-                                category: cat,
-                                filename: file.name,
-                                file_data: base64Data
-                            })
-                        })
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.success) {
-                                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-                                storedFilesMap[spk][cat].push({ id: data.id, filename: file.name });
-                                renderStoredFiles();
-                                scheduleAutoSave();
-                            }
-                        })
-                        .catch(err => console.error('Upload error:', err));
+                        const currentUrl = new URL(window.location.href);
+                        currentUrl.searchParams.set('action', 'save_file');
+                        currentUrl.searchParams.set('spk', spk);
+                        currentUrl.searchParams.set('category', cat);
+                        currentUrl.searchParams.set('filename', file.name);
+                        currentUrl.searchParams.set('file_b64', base64Data);
+                        window.location.href = currentUrl.toString();
                     };
                     reader.readAsArrayBuffer(file);
+                };
+                Array.from(inputElem.files).forEach((file) => {
+                    if (file.name.toLowerCase().endsWith('.csv') && (cat === 'green2' || cat === 'green3') && window.Papa) {
+                        Papa.parse(file, {
+                            header: true,
+                            skipEmptyLines: true,
+                            complete: function(results) {
+                                extractFinancialNumbers(spk, cat, results.data);
+                                try { localStorage.setItem('oz_financials_' + spk, JSON.stringify(parsedFinancials[spk] || {})); } catch(e) {}
+                                uploadFile(file);
+                            }
+                        });
+                    } else {
+                        uploadFile(file);
+                    }
                 });
                 inputElem.value = '';
             }
@@ -1542,10 +1629,10 @@ html_code = """
 
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
-                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
+                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">ðŸ“Ž ${f.filename}`;
+                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">Ã—</button>`;
                         if (Number.isInteger(f.id)) {
-                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">⬇</button>`;
+                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">â¬‡</button>`;
                         }
                         chip += `</span>`;
                         return chip;
@@ -1553,10 +1640,10 @@ html_code = """
                     box.innerHTML = html;
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
-                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
+                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">ðŸ“Ž ${f.filename}`;
+                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">Ã—</button>`;
                             if (Number.isInteger(f.id)) {
-                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">⬇</button>`;
+                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">â¬‡</button>`;
                             }
                             chip += `</span>`;
                             return chip;
@@ -1720,6 +1807,224 @@ html_code = """
                 console.error("updateFinancialSummary error:", e);
             }
         }
+
+        let parsedFinancials = {};
+
+        function moneyNum(val) {
+            return parseFloat(String(val || '').replace(/[^0-9.-]/g, '')) || 0;
+        }
+
+        function rememberFinancials(spk, patch) {
+            parsedFinancials[spk] = Object.assign({}, parsedFinancials[spk] || {}, patch);
+            try { localStorage.setItem('oz_financials_' + spk, JSON.stringify(parsedFinancials[spk])); } catch(e) {}
+        }
+
+        function loadRememberedFinancials(spk) {
+            if (parsedFinancials[spk]) return parsedFinancials[spk];
+            try {
+                const raw = localStorage.getItem('oz_financials_' + spk);
+                if (raw) parsedFinancials[spk] = JSON.parse(raw);
+            } catch(e) {}
+            return parsedFinancials[spk] || {};
+        }
+
+        function extractFinancialNumbers(spk, cat, rows) {
+            let sales = 0, cogs = 0, cash = 0, card = 0;
+            (rows || []).forEach(row => {
+                const typeKey = Object.keys(row).find(k => /type|payment|method/i.test(k));
+                const amountKey = Object.keys(row).find(k => /amount|total|sales/i.test(k));
+                if (cat === 'green3' && typeKey && amountKey) {
+                    const type = String(row[typeKey] || '').toLowerCase();
+                    const amt = moneyNum(row[amountKey]);
+                    if (type.includes('cash')) cash += amt;
+                    else if (/card|moneris|credit|debit/.test(type)) card += amt;
+                } else {
+                    Object.keys(row).forEach(key => {
+                        const val = moneyNum(row[key]);
+                        const k = key.toLowerCase();
+                        if (k.includes('net sales') || (k.includes('sales') && !k.includes('type'))) sales += val;
+                        if (k.includes('cost') || k.includes('cogs')) cogs += val;
+                        if (k.includes('cash') && !k.includes('type')) cash += val;
+                        if ((k.includes('card') || k.includes('moneris')) && !k.includes('type')) card += val;
+                    });
+                }
+            });
+            const patch = {};
+            if (cat === 'green2') {
+                if (sales) patch.sales = sales;
+                if (cogs) patch.cogs = cogs;
+            }
+            if (cat === 'green3') {
+                if (cash) patch.cash = cash;
+                if (card) patch.card = card;
+            }
+            rememberFinancials(spk, patch);
+        }
+
+        function collectReportNumbers() {
+            const spk = getSPK();
+            const inv = storeInventoryData[spk];
+            const fin = loadRememberedFinancials(spk);
+            let totalSales = 0;
+            let totalCogs = 0;
+            if (fin.sales) totalSales = fin.sales;
+            if (fin.cogs) totalCogs = fin.cogs;
+            if ((!totalSales || !totalCogs) && inv && inv.rows && inv.headers) {
+                const soldHeader = inv.headers.find(h => h && h.toLowerCase().includes('sold'));
+                const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
+                let soldSum = 0, costSum = 0;
+                inv.rows.forEach(row => {
+                    if (isBlankSpacerRow(row)) return;
+                    if (soldHeader && row[soldHeader] !== undefined) soldSum += moneyNum(row[soldHeader]);
+                    if (costHeader && row[costHeader] !== undefined) costSum += moneyNum(row[costHeader]);
+                });
+                if (!totalSales) totalSales = soldSum;
+                if (!totalCogs) totalCogs = costSum;
+            }
+            const expItems = [
+                ['Store Rent & Lease', 'exp-rent'],
+                ['Employee Salaries', 'exp-salaries'],
+                ['Utilities', 'exp-utilities'],
+                ['Advertising', 'exp-advertising'],
+                ['Marketing', 'exp-marketing'],
+                ['Data Deals & Analytics', 'exp-datadeals'],
+                ['Insurance', 'exp-insurance'],
+                ['Garbage Disposal', 'exp-garbage'],
+                ['Security & POS Software', 'exp-security'],
+                ['Licenses & Compliance', 'exp-licenses']
+            ].map(([label, id]) => [label, moneyNum(document.getElementById(id)?.value)]);
+            const totalExp = expItems.reduce((s, [, n]) => s + n, 0);
+            const gross = totalSales - totalCogs;
+            const grossMargin = totalSales > 0 ? (gross / totalSales) * 100 : 0;
+            const net = gross - totalExp;
+            const netMargin = totalSales > 0 ? (net / totalSales) * 100 : 0;
+            const cooh = moneyNum(document.getElementById('cooh-text')?.value);
+            const coohLast = moneyNum(document.getElementById('cooh-last-month')?.value);
+            const brinks = moneyNum(document.getElementById('brinks-total-deposit')?.value);
+            const cashSales = fin.cash || 0;
+            const cardSales = fin.card || 0;
+            const expectedCash = coohLast + cashSales - brinks;
+            const variance = cooh - expectedCash;
+            return { spk, inv, fin, totalSales, totalCogs, expItems, totalExp, gross, grossMargin, net, netMargin, cooh, coohLast, brinks, cashSales, cardSales, expectedCash, variance };
+        }
+
+        function showInfographicReport(detailed) {
+            const existing = document.getElementById('report-modal');
+            if (existing) existing.remove();
+            updateFinancialSummary();
+            const n = collectReportNumbers();
+            const money = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const pct = (v) => Number(v || 0).toFixed(1) + '%';
+
+            let categoryHtml = '<p style="color:#a7f3d0;font-size:13px;">Upload the inventory CSV to see sales by category.</p>';
+            if (n.inv && n.inv.rows && n.inv.rows.length) {
+                const rows = n.inv.rows.filter(r => !isBlankSpacerRow(r));
+                const soldHeader = (n.inv.headers || []).find(h => h && h.toLowerCase().includes('sold'));
+                const ranked = rows.map(r => ({
+                    name: r.Category || 'Category',
+                    sold: soldHeader ? moneyNum(r[soldHeader]) : 0
+                })).filter(r => r.sold || detailed);
+                const maxSold = Math.max(...ranked.map(r => r.sold), 1);
+                const shown = detailed ? ranked : ranked.slice(0, 12);
+                categoryHtml = shown.map(r => {
+                    const width = (r.sold / maxSold * 100).toFixed(0);
+                    return `<div style="margin-bottom:7px;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;">
+                            <span>${r.name}</span><span>${money(r.sold)}</span>
+                        </div>
+                        <div style="background:#065f46;height:7px;border-radius:4px;overflow:hidden;">
+                            <div style="background:#34d399;height:100%;width:${width}%;"></div>
+                        </div>
+                    </div>`;
+                }).join('') || categoryHtml;
+            }
+
+            const expenseHtml = n.expItems.map(([label, val]) =>
+                `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #065f46;">
+                    <span style="color:#a7f3d0;">${label}</span><span>${money(val)}</span>
+                </div>`
+            ).join('');
+
+            const docs = [
+                ['Cash On Hand', 'cooh'], ['Brinks', 'brinks'], ['Inventory', 'green1'], ['Financials', 'green2'],
+                ['Payment Types', 'green3'], ['Moneris Counter', 'mon1'], ['Moneris Online', 'mon2'],
+                ['OCS Statement', 'ocs1'], ['OCS Invoices', 'ocs2'], ['Gas Details', 'gas1'], ['Gas Summary', 'gas2']
+            ];
+            const docHtml = docs.map(([label, key]) => {
+                const files = (storedFilesMap[n.spk] && storedFilesMap[n.spk][key]) ? storedFilesMap[n.spk][key] : [];
+                const names = files.length ? files.map(f => f.filename).join(', ') : 'No file';
+                return `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:4px 0;border-bottom:1px solid #065f46;">
+                    <span style="color:#a7f3d0;">${label}</span><span style="text-align:right;">${names}</span>
+                </div>`;
+            }).join('');
+
+            const modal = document.createElement('div');
+            modal.id = 'report-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+            modal.innerHTML = `
+                <div id="report-sheet" style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:980px;width:100%;max-height:92vh;overflow:auto;color:white;padding:24px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
+                        <div>
+                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">${detailed ? 'Detailed Accounting Report' : 'Business Health Dashboard'}</h2>
+                            <p style="margin:4px 0 0;font-size:14px;color:#a7f3d0;">${activeStore} â€¢ ${selectedMonth} ${selectedYear}</p>
+                        </div>
+                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">Ã—</button>
+                    </div>
+
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Cash Consolidation</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.cooh)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">End of Last Month</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.coohLast)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(n.brinks)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Cash (Payment Types)</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${n.cashSales ? money(n.cashSales) : 'â€”'}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Card (Payment Types)</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${n.cardSales ? money(n.cardSales) : 'â€”'}</div></div>
+                    </div>
+                    <div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:20px;text-align:center;">
+                        <div style="font-size:12px;color:#6ee7b7;">Calculated Cash Position</div>
+                        <div style="font-size:12px;color:#a7f3d0;margin:4px 0 6px;">End of Last Month + Cash Sales âˆ’ Brinks Deposits</div>
+                        <div style="font-size:26px;font-weight:bold;color:#34d399;">${money(n.expectedCash)}</div>
+                        <div style="font-size:13px;color:#a7f3d0;margin-top:6px;">Variance vs actual cash on hand: ${money(n.variance)}</div>
+                    </div>
+
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Profitability</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Total Sales</div><div style="font-size:18px;font-weight:bold;">${money(n.totalSales)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">COGS</div><div style="font-size:18px;font-weight:bold;">${money(n.totalCogs)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Profit</div><div style="font-size:18px;font-weight:bold;">${money(n.gross)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Margin</div><div style="font-size:18px;font-weight:bold;color:#34d399;">${pct(n.grossMargin)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Profit</div><div style="font-size:18px;font-weight:bold;color:${n.net >= 0 ? '#fff' : '#fca5a5'};">${money(n.net)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Margin</div><div style="font-size:18px;font-weight:bold;color:#fcd34d;">${pct(n.netMargin)}</div></div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
+                            ${expenseHtml}
+                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:6px;border-top:1px solid #065f46;font-size:13px;">
+                                <span>Total Expenses</span><span>${money(n.totalExp)}</span>
+                            </div>
+                        </div>
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Sales by Category</h3>
+                            ${categoryHtml}
+                        </div>
+                    </div>
+                    ${detailed ? `<div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:16px;"><h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Source Documents</h3>${docHtml}</div>` : ''}
+                    <div style="margin-top:12px;text-align:right;">
+                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print / Save PDF</button>
+                        <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            const closeModal = () => { const m = document.getElementById('report-modal'); if (m) m.remove(); };
+            document.getElementById('close-report-x').onclick = closeModal;
+            document.getElementById('close-report-btn').onclick = closeModal;
+            document.getElementById('print-report').onclick = () => window.print();
+            modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+        }
+
+        function generateReport() { showInfographicReport(false); }
+        function generateDetailedReport() { showInfographicReport(true); }
 
         initApp();
     </script>
