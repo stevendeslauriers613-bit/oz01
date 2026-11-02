@@ -938,7 +938,6 @@ html_code = """
     </div>
 
     <script>
-        // Exact 20 categories + 1 blank spacer row right after row 14 (Vapes - Pods)
         const ACCOUNTANT_ORDER = [
             "Beverages",
             "Dried Flower",
@@ -1115,10 +1114,6 @@ html_code = """
             return false;
         }
 
-        // Normalizes any raw or previously saved rows to guarantee:
-        // 1. No Total / Sum rows at the bottom
-        // 2. Exact ACCOUNTANT_ORDER sorting
-        // 3. A true empty row after row 14 ("Vapes - Pods") before "Accessories"
         function normalizeInventoryRows(fields, rawRows) {
             const validRows = (rawRows || []).filter(row => {
                 if (!row) return false;
@@ -1159,7 +1154,6 @@ html_code = """
             return sortedRows;
         }
 
-        // Builds a styled Excel Workbook matching Oz 7_October_2026_Formatted_Inventory.xlsx
         function buildFormattedWorkbook(headers, rows, sheetName) {
             const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
             const normalizedRows = normalizeInventoryRows(cleanHeaders, rows);
@@ -1179,7 +1173,6 @@ html_code = """
 
             const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-            // Style Row 1: Dark Green Header (#065F46) with Bold White Text
             const headerStyle = {
                 fill: { patternType: "solid", fgColor: { rgb: "065F46" } },
                 font: { name: "Calibri", sz: 11, bold: true, color: { rgb: "FFFFFF" } },
@@ -1204,7 +1197,6 @@ html_code = """
                 if (ws[cellRef]) ws[cellRef].s = headerStyle;
             }
 
-            // Style Data Rows & leave Row 15 (r = 14) completely blank
             for (let r = 1; r < aoa.length; r++) {
                 const isSpacer = aoa[r][0] === null || aoa[r][0] === "";
                 for (let c = 0; c < cleanHeaders.length; c++) {
@@ -1648,7 +1640,6 @@ html_code = """
             }
 
             if (isSilent) return;
-            // Stay on the page. Navigating to save through the URL drops uploads and wipes the form.
         }
 
         function updateCompletionBadge() {
@@ -2123,7 +2114,6 @@ html_code = """
 </html>
 """
 
-# Safe string replacement for variables
 final_html = (
     html_code.replace("REPLACE_CURRENT_NAME", current_name)
     .replace("REPLACE_CURRENT_ROLE", current_role)
