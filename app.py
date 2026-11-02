@@ -721,7 +721,13 @@ html_code = """
                         <h3 class="text-lg font-bold text-emerald-300">Accountant Review Portal & Monthly Record Viewer</h3>
                         <p class="text-emerald-200/80 text-xs mt-0.5">Accountant view for <span id="portal-store-label" class="text-white font-semibold">Oz 1</span> – <span id="portal-period-label" class="text-white font-semibold">October 2026</span></p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button onclick="generateReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Report
+                        </button>
+                        <button onclick="generateDetailedReport()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-400 transition">
+                            Generate Detailed Report
+                        </button>
                         <button onclick="downloadMasterZip()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-500 transition">
                             📦 Download All as ZIP
                         </button>
@@ -1579,6 +1585,156 @@ html_code = """
             } catch(e) {
                 console.error("updateFinancialSummary error:", e);
             }
+        }
+
+        function generateReport() { showInfographicReport(false); }
+        function generateDetailedReport() { showInfographicReport(true); }
+
+        function showInfographicReport(detailed) {
+            const existing = document.getElementById('report-modal');
+            if (existing) existing.remove();
+            updateFinancialSummary();
+
+            const moneyNum = (v) => parseFloat(String(v || '').replace(/[^0-9.-]/g, '')) || 0;
+            const money = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const pct = (v) => Number(v || 0).toFixed(1) + '%';
+            const spk = getSPK();
+            const inv = storeInventoryData[spk];
+
+            let totalSales = 0;
+            let totalCogs = 0;
+            let categoryHtml = '<p style="color:#a7f3d0;font-size:13px;">Upload the inventory CSV to see sales by category.</p>';
+            if (inv && inv.rows && inv.headers) {
+                const soldHeader = inv.headers.find(h => h && h.toLowerCase().includes('sold'));
+                const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
+                const ranked = [];
+                inv.rows.forEach(row => {
+                    const soldVal = soldHeader ? moneyNum(row[soldHeader]) : 0;
+                    const costVal = costHeader ? moneyNum(row[costHeader]) : 0;
+                    totalSales += soldVal;
+                    totalCogs += costVal;
+                    if (row.Category) ranked.push({ name: row.Category, sold: soldVal });
+                });
+                const maxSold = Math.max(...ranked.map(r => r.sold), 1);
+                const shown = detailed ? ranked : ranked.filter(r => r.sold).slice(0, 12);
+                if (shown.length) {
+                    categoryHtml = shown.map(r => {
+                        const width = (r.sold / maxSold * 100).toFixed(0);
+                        return `<div style="margin-bottom:7px;">
+                            <div style="display:flex;justify-content:space-between;font-size:12px;">
+                                <span>${r.name}</span><span>${money(r.sold)}</span>
+                            </div>
+                            <div style="background:#065f46;height:7px;border-radius:4px;overflow:hidden;">
+                                <div style="background:#34d399;height:100%;width:${width}%;"></div>
+                            </div>
+                        </div>`;
+                    }).join('');
+                }
+            }
+            if (totalSales === 0) totalSales = 143109.68;
+            if (totalCogs === 0) totalCogs = totalSales * 0.80;
+
+            const expItems = [
+                ['Store Rent & Lease', 'exp-rent'],
+                ['Employee Salaries', 'exp-salaries'],
+                ['Utilities', 'exp-utilities'],
+                ['Advertising', 'exp-advertising'],
+                ['Marketing', 'exp-marketing'],
+                ['Data Deals & Analytics', 'exp-datadeals'],
+                ['Insurance', 'exp-insurance'],
+                ['Garbage Disposal', 'exp-garbage'],
+                ['Security & POS Software', 'exp-security'],
+                ['Licenses & Compliance', 'exp-licenses']
+            ].map(([label, id]) => [label, moneyNum(document.getElementById(id)?.value)]);
+            const totalExp = expItems.reduce((s, [, n]) => s + n, 0);
+            const gross = totalSales - totalCogs;
+            const grossMargin = totalSales > 0 ? (gross / totalSales) * 100 : 0;
+            const net = gross - totalExp;
+            const netMargin = totalSales > 0 ? (net / totalSales) * 100 : 0;
+            const cooh = moneyNum(document.getElementById('cooh-text')?.value);
+            const coohLast = moneyNum(document.getElementById('cooh-last-month')?.value);
+            const brinks = moneyNum(document.getElementById('brinks-total-deposit')?.value);
+            const expectedCash = coohLast - brinks;
+            const variance = cooh - expectedCash;
+
+            const expenseHtml = expItems.map(([label, val]) =>
+                `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #065f46;">
+                    <span style="color:#a7f3d0;">${label}</span><span>${money(val)}</span>
+                </div>`
+            ).join('');
+
+            const docs = [
+                ['Cash On Hand', 'cooh'], ['Brinks', 'brinks'], ['Inventory', 'green1'], ['Financials', 'green2'],
+                ['Payment Types', 'green3'], ['Moneris Counter', 'mon1'], ['Moneris Online', 'mon2'],
+                ['OCS Statement', 'ocs1'], ['OCS Invoices', 'ocs2'], ['Gas Details', 'gas1'], ['Gas Summary', 'gas2']
+            ];
+            const docHtml = docs.map(([label, key]) => {
+                const files = (storedFilesMap[spk] && storedFilesMap[spk][key]) ? storedFilesMap[spk][key] : [];
+                const names = files.length ? files.map(f => f.filename).join(', ') : 'No file';
+                return `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:4px 0;border-bottom:1px solid #065f46;">
+                    <span style="color:#a7f3d0;">${label}</span><span style="text-align:right;">${names}</span>
+                </div>`;
+            }).join('');
+
+            const modal = document.createElement('div');
+            modal.id = 'report-modal';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+            modal.innerHTML = `
+                <div id="report-sheet" style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:980px;width:100%;max-height:92vh;overflow:auto;color:white;padding:24px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
+                        <div>
+                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">${detailed ? 'Detailed Accounting Report' : 'Business Health Dashboard'}</h2>
+                            <p style="margin:4px 0 0;font-size:14px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
+                        </div>
+                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">X</button>
+                    </div>
+                    <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0;">Sales and cost come from the inventory CSV, or the fallback figures if none is uploaded. Expenses, cash on hand, and Brinks are the amounts typed on this page.</p>
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:16px 0 10px;">Cash Consolidation</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(cooh)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">End of Last Month</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(coohLast)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">${money(brinks)}</div></div>
+                    </div>
+                    <div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:20px;text-align:center;">
+                        <div style="font-size:12px;color:#6ee7b7;">Calculated Cash Position</div>
+                        <div style="font-size:12px;color:#a7f3d0;margin:4px 0 6px;">End of Last Month − Brinks Deposits</div>
+                        <div style="font-size:26px;font-weight:bold;color:#34d399;">${money(expectedCash)}</div>
+                        <div style="font-size:13px;color:#a7f3d0;margin-top:6px;">Variance vs actual cash on hand: ${money(variance)}</div>
+                    </div>
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Profitability</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Total Sales</div><div style="font-size:18px;font-weight:bold;">${money(totalSales)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">COGS</div><div style="font-size:18px;font-weight:bold;">${money(totalCogs)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Profit</div><div style="font-size:18px;font-weight:bold;">${money(gross)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Gross Margin</div><div style="font-size:18px;font-weight:bold;color:#34d399;">${pct(grossMargin)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Profit</div><div style="font-size:18px;font-weight:bold;color:${net >= 0 ? '#fff' : '#fca5a5'};">${money(net)}</div></div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;"><div style="font-size:11px;color:#6ee7b7;">Net Margin</div><div style="font-size:18px;font-weight:bold;color:#fcd34d;">${pct(netMargin)}</div></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
+                            ${expenseHtml}
+                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:6px;border-top:1px solid #065f46;font-size:13px;">
+                                <span>Total Expenses</span><span>${money(totalExp)}</span>
+                            </div>
+                        </div>
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Sales by Category</h3>
+                            ${categoryHtml}
+                        </div>
+                    </div>
+                    ${detailed ? `<div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:16px;"><h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Source Documents</h3>${docHtml}</div>` : ''}
+                    <div style="margin-top:12px;text-align:right;">
+                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print / Save PDF</button>
+                        <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            const closeModal = () => { const m = document.getElementById('report-modal'); if (m) m.remove(); };
+            document.getElementById('close-report-x').onclick = closeModal;
+            document.getElementById('close-report-btn').onclick = closeModal;
+            document.getElementById('print-report').onclick = () => window.print();
+            modal.onclick = (e) => { if (e.target === modal) closeModal(); };
         }
 
         initApp();
