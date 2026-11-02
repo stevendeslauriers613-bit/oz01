@@ -837,6 +837,63 @@ html_code = """
                     </div>
                 </div>
 
+                <!-- Monthly Financial Summary with Expenses -->
+                <div class="mt-6 bg-emerald-900/40 rounded-xl border border-emerald-800 p-5">
+                    <h4 class="text-base font-bold text-emerald-300 mb-4">Monthly Financial Summary</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Rent</label>
+                            <input type="text" id="exp-rent" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Utilities</label>
+                            <input type="text" id="exp-utilities" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Insurance</label>
+                            <input type="text" id="exp-insurance" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Employee Salary</label>
+                            <input type="text" id="exp-salary" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Credit Card Expenses</label>
+                            <input type="text" id="exp-cc" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Advertising & Signage</label>
+                            <input type="text" id="exp-ads" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Repairs</label>
+                            <input type="text" id="exp-repairs" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Other Expenses</label>
+                            <input type="text" id="exp-other" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Total Sales (from inventory)</div>
+                            <div id="fin-total-sales" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Total Expenses</div>
+                            <div id="fin-total-exp" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Estimated Net</div>
+                            <div id="fin-net" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Net Margin</div>
+                            <div id="fin-margin" class="font-bold text-white text-lg">0%</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="bg-emerald-900/40 rounded-xl border border-emerald-800 overflow-hidden">
                     <table class="w-full text-left border-collapse text-xs">
                         <thead class="bg-emerald-900 text-emerald-300 border-b border-emerald-800">
@@ -881,16 +938,34 @@ html_code = """
         let selectedMonth = "October";
         let selectedYear = "2026";
 
+        // Restore last selected period from localStorage so uploads don't reset to October
+        try {
+            const savedPeriod = localStorage.getItem('oz_selected_period');
+            if (savedPeriod) {
+                const p = JSON.parse(savedPeriod);
+                if (p.month) selectedMonth = p.month;
+                if (p.year) selectedYear = p.year;
+            }
+        } catch(e) {}
+
         let storedFilesMap = __FILES_JSON__;
         let persistentStoreData = __STORE_DATA_JSON__;
         let storeInventoryData = {};
 
         function initApp() {
+            // Apply restored month/year to the dropdowns
+            const monthSel = document.getElementById('select-month');
+            const yearSel = document.getElementById('select-year');
+            if (monthSel) monthSel.value = selectedMonth;
+            if (yearSel) yearSel.value = selectedYear;
+
             renderTabs();
             loadStorePeriodData();
             setupCSVParser();
             document.getElementById('workspace-store-name').textContent = activeStore;
             document.getElementById('portal-store-label').textContent = activeStore;
+            document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
+            document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
         }
 
         function renderTabs() {
@@ -914,6 +989,9 @@ html_code = """
         function updatePeriod() {
             selectedMonth = document.getElementById('select-month').value;
             selectedYear = document.getElementById('select-year').value;
+            try {
+                localStorage.setItem('oz_selected_period', JSON.stringify({month: selectedMonth, year: selectedYear}));
+            } catch(e) {}
             document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             loadStorePeriodData();
@@ -989,6 +1067,13 @@ html_code = """
                         const el = document.getElementById('brinks-total-deposit');
                         if (el) el.value = chkData.brinks_total_deposit;
                     }
+                    if (chkData.expenses) {
+                        const exp = chkData.expenses;
+                        ['rent','utilities','insurance','salary','cc','ads','repairs','other'].forEach(k => {
+                            const el = document.getElementById('exp-' + k);
+                            if (el && exp[k] !== undefined) el.value = exp[k];
+                        });
+                    }
                 }
                 if(data.inventory_data) {
                     storeInventoryData[spk] = {
@@ -1004,6 +1089,7 @@ html_code = """
             renderInventoryTable();
             renderStoredFiles();
             updateCompletionBadge();
+            updateFinancialSummary();
         }
 
         function setupCSVParser() {
@@ -1202,12 +1288,24 @@ html_code = """
             const coohLastMonth = document.getElementById('cooh-last-month')?.value || '';
             const brinksTotalDeposit = document.getElementById('brinks-total-deposit')?.value || '';
 
+            const expenses = {
+                rent: document.getElementById('exp-rent')?.value || '',
+                utilities: document.getElementById('exp-utilities')?.value || '',
+                insurance: document.getElementById('exp-insurance')?.value || '',
+                salary: document.getElementById('exp-salary')?.value || '',
+                cc: document.getElementById('exp-cc')?.value || '',
+                ads: document.getElementById('exp-ads')?.value || '',
+                repairs: document.getElementById('exp-repairs')?.value || '',
+                other: document.getElementById('exp-other')?.value || ''
+            };
+
             const checklistData = { 
                 checkboxes: checkboxes, 
                 notes: notes, 
                 dates: dates,
                 cooh_last_month: coohLastMonth,
-                brinks_total_deposit: brinksTotalDeposit
+                brinks_total_deposit: brinksTotalDeposit,
+                expenses: expenses
             };
 
             // Include inventory so it persists
@@ -1405,41 +1503,86 @@ html_code = """
             }
         }
 
+        function parseNum(val) {
+            return parseFloat(String(val || 0).replace(/[^0-9.-]/g, '')) || 0;
+        }
+
+        function updateFinancialSummary() {
+            const spk = getSPK();
+            const inv = storeInventoryData[spk];
+            let totalSales = 0;
+            if (inv && inv.rows) {
+                inv.rows.forEach(r => {
+                    totalSales += parseNum(r.Sold || r.sold);
+                });
+            }
+            const expenses = [
+                'exp-rent','exp-utilities','exp-insurance','exp-salary',
+                'exp-cc','exp-ads','exp-repairs','exp-other'
+            ].reduce((sum, id) => sum + parseNum(document.getElementById(id)?.value), 0);
+
+            const net = totalSales - expenses;
+            const margin = totalSales > 0 ? (net / totalSales * 100) : 0;
+
+            document.getElementById('fin-total-sales').textContent = '$' + totalSales.toLocaleString(undefined, {minimumFractionDigits:2});
+            document.getElementById('fin-total-exp').textContent = '$' + expenses.toLocaleString(undefined, {minimumFractionDigits:2});
+            document.getElementById('fin-net').textContent = '$' + net.toLocaleString(undefined, {minimumFractionDigits:2});
+            document.getElementById('fin-margin').textContent = margin.toFixed(1) + '%';
+        }
+
         function generateReport() {
+            updateFinancialSummary();
             const spk = getSPK();
             const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
             const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
             const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
-            const inv = storeInventoryData[spk];
-            let totalSold = 0;
-            if (inv && inv.rows) {
-                inv.rows.forEach(r => {
-                    const sold = parseFloat(String(r.Sold || r.sold || 0).replace(/[^0-9.-]/g, '')) || 0;
-                    totalSold += sold;
-                });
-            }
+            const totalSales = document.getElementById('fin-total-sales').textContent;
+            const totalExp = document.getElementById('fin-total-exp').textContent;
+            const net = document.getElementById('fin-net').textContent;
+            const margin = document.getElementById('fin-margin').textContent;
+
             alert(
                 `Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n` +
                 `Cash On Hand (End of Day): ${cooh}\n` +
                 `Cash On Hand (End of Last Month): ${coohLast}\n` +
-                `Total Brinks Deposit: ${brinksDep}\n` +
-                `Total Inventory Sold: $${totalSold.toLocaleString(undefined, {minimumFractionDigits:2})}\n\n` +
-                `(Detailed financials available via Generate Detailed Report)`
+                `Total Brinks Deposit: ${brinksDep}\n\n` +
+                `Total Sales: ${totalSales}\n` +
+                `Total Expenses: ${totalExp}\n` +
+                `Estimated Net: ${net}\n` +
+                `Net Margin: ${margin}`
             );
         }
 
         function generateDetailedReport() {
+            updateFinancialSummary();
             const spk = getSPK();
             const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
             const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
             const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
             const chargebacks = document.getElementById('chargebacks-text')?.value || 'Nothing to report.';
             const inv = storeInventoryData[spk];
+
             let detail = `Detailed Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n`;
             detail += `Cash On Hand (End of Day): ${cooh}\n`;
             detail += `Cash On Hand (End of Last Month): ${coohLast}\n`;
             detail += `Total Brinks Deposit: ${brinksDep}\n`;
             detail += `Chargebacks: ${chargebacks}\n\n`;
+
+            detail += `Expenses:\n`;
+            detail += `  Rent: $${parseNum(document.getElementById('exp-rent')?.value).toFixed(2)}\n`;
+            detail += `  Utilities: $${parseNum(document.getElementById('exp-utilities')?.value).toFixed(2)}\n`;
+            detail += `  Insurance: $${parseNum(document.getElementById('exp-insurance')?.value).toFixed(2)}\n`;
+            detail += `  Employee Salary: $${parseNum(document.getElementById('exp-salary')?.value).toFixed(2)}\n`;
+            detail += `  Credit Card: $${parseNum(document.getElementById('exp-cc')?.value).toFixed(2)}\n`;
+            detail += `  Advertising & Signage: $${parseNum(document.getElementById('exp-ads')?.value).toFixed(2)}\n`;
+            detail += `  Repairs: $${parseNum(document.getElementById('exp-repairs')?.value).toFixed(2)}\n`;
+            detail += `  Other: $${parseNum(document.getElementById('exp-other')?.value).toFixed(2)}\n\n`;
+
+            detail += `Total Sales: ${document.getElementById('fin-total-sales').textContent}\n`;
+            detail += `Total Expenses: ${document.getElementById('fin-total-exp').textContent}\n`;
+            detail += `Estimated Net: ${document.getElementById('fin-net').textContent}\n`;
+            detail += `Net Margin: ${document.getElementById('fin-margin').textContent}\n\n`;
+
             if (inv && inv.rows) {
                 detail += `Inventory Sold by Category:\n`;
                 inv.rows.forEach(r => {
@@ -1452,6 +1595,13 @@ html_code = """
             }
             alert(detail);
         }
+
+        // Call financial update whenever relevant data changes
+        const origSchedule = scheduleAutoSave;
+        scheduleAutoSave = function() {
+            origSchedule();
+            updateFinancialSummary();
+        };
 
         initApp();
     </script>
