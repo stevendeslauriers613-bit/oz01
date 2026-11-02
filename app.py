@@ -1151,13 +1151,11 @@ html_code = """
                 }
             }
 
-            // Always try to restore inventory from local backup if not already loaded
-            if (!storeInventoryData[spk]) {
-                try {
-                    const localInv = localStorage.getItem('oz_inventory_' + spk);
-                    if (localInv) storeInventoryData[spk] = JSON.parse(localInv);
-                } catch(e) {}
-            }
+            // Restore parsed financials from local storage
+            try {
+                const localFin = localStorage.getItem('oz_financials_' + spk);
+                if (localFin) parsedFinancials[spk] = JSON.parse(localFin);
+            } catch(e) {}
 
             renderInventoryTable();
             renderStoredFiles();
@@ -1491,25 +1489,94 @@ html_code = """
             if(document.getElementById('portal-date-brinks')) document.getElementById('portal-date-brinks').textContent = brinksDate || 'No date';
         }
 
+        let parsedFinancials = {};  // store_period_key -> { sales, cogs, cash, card, etc. }
+
         function handleItemFiles(cat, inputElem) {
             if (inputElem.files && inputElem.files.length > 0) {
                 const spk = getSPK();
                 Array.from(inputElem.files).forEach((file) => {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
-                        const currentUrl = new URL(window.location.href);
-                        currentUrl.searchParams.set('action', 'save_file');
-                        currentUrl.searchParams.set('spk', spk);
-                        currentUrl.searchParams.set('category', cat);
-                        currentUrl.searchParams.set('filename', file.name);
-                        currentUrl.searchParams.set('file_b64', base64String);
-                        window.location.href = currentUrl.toString();
-                    };
-                    reader.readAsArrayBuffer(file);
+                    if (file.name.toLowerCase().endsWith('.csv') && (cat === 'green2' || cat === 'green3')) {
+                        // Parse financial CSVs client-side and extract numbers
+                        Papa.parse(file, {
+                            header: true,
+                            skipEmptyLines: true,
+                            complete: function(results) {
+                                extractFinancialNumbers(spk, cat, results.data, file.name);
+                                // Still attempt the upload
+                                const reader = new FileReader();
+                                reader.onload = function(e) {
+                                    const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
+                                    const currentUrl = new URL(window.location.href);
+                                    currentUrl.searchParams.set('action', 'save_file');
+                                    currentUrl.searchParams.set('spk', spk);
+                                    currentUrl.searchParams.set('category', cat);
+                                    currentUrl.searchParams.set('filename', file.name);
+                                    currentUrl.searchParams.set('file_b64', base64String);
+                                    window.location.href = currentUrl.toString();
+                                };
+                                reader.readAsArrayBuffer(file);
+                            }
+                        });
+                    } else {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const base64String = btoa(String.fromCharCode(...new Uint8Array(e.target.result)));
+                            const currentUrl = new URL(window.location.href);
+                            currentUrl.searchParams.set('action', 'save_file');
+                            currentUrl.searchParams.set('spk', spk);
+                            currentUrl.searchParams.set('category', cat);
+                            currentUrl.searchParams.set('filename', file.name);
+                            currentUrl.searchParams.set('file_b64', base64String);
+                            window.location.href = currentUrl.toString();
+                        };
+                        reader.readAsArrayBuffer(file);
+                    }
                 });
                 inputElem.value = '';
             }
+        }
+
+        function extractFinancialNumbers(spk, cat, rows, fileName) {
+            if (!parsedFinancials[spk]) parsedFinancials[spk] = {};
+            let sales = 0, cogs = 0, cash = 0, card = 0;
+
+            rows.forEach(row => {
+                // Payment types often have a type column and an amount column
+                const typeKey = Object.keys(row).find(k => k.toLowerCase().includes('type') || k.toLowerCase().includes('payment') || k.toLowerCase().includes('method'));
+                const amountKey = Object.keys(row).find(k => k.toLowerCase().includes('amount') || k.toLowerCase().includes('total') || k.toLowerCase().includes('sales'));
+
+                if (cat === 'green3' && typeKey && amountKey) {
+                    const type = String(row[typeKey] || '').toLowerCase();
+                    const amt = parseFloat(String(row[amountKey] || '').replace(/[^0-9.-]/g, '')) || 0;
+                    if (type.includes('cash')) cash += amt;
+                    else if (type.includes('card') || type.includes('moneris') || type.includes('credit') || type.includes('debit')) card += amt;
+                } else {
+                    Object.keys(row).forEach(key => {
+                        const val = parseFloat(String(row[key] || '').replace(/[^0-9.-]/g, '')) || 0;
+                        const k = key.toLowerCase();
+                        if (k.includes('net sales') || (k.includes('sales') && !k.includes('type'))) sales += val;
+                        if (k.includes('cost') || k.includes('cogs')) cogs += val;
+                        if (k.includes('cash') && !k.includes('type')) cash += val;
+                        if ((k.includes('card') || k.includes('moneris')) && !k.includes('type')) card += val;
+                    });
+                }
+            });
+
+            if (cat === 'green2') {
+                if (sales > 0) parsedFinancials[spk].sales = sales;
+                if (cogs > 0) parsedFinancials[spk].cogs = cogs;
+            }
+            if (cat === 'green3') {
+                if (cash > 0) parsedFinancials[spk].cash = cash;
+                if (card > 0) parsedFinancials[spk].card = card;
+            }
+
+            try {
+                localStorage.setItem('oz_financials_' + spk, JSON.stringify(parsedFinancials[spk]));
+            } catch(e) {}
+
+            updateFinancialSummary();
+            alert(`Parsed ${fileName}\\nSales: $${sales.toFixed(0)}\\nCOGS: $${cogs.toFixed(0)}\\nCash: $${cash.toFixed(0)}\\nCard: $${card.toFixed(0)}`);
         }
 
         function handleRemoveFile(fileId) {
@@ -1631,26 +1698,27 @@ html_code = """
                 let totalSales = 0;
                 let totalCogs = 0;
 
-                if (inv && inv.rows && inv.headers) {
+                // Prefer parsed financials CSV if available
+                if (parsedFinancials[spk]) {
+                    if (parsedFinancials[spk].sales) totalSales = parsedFinancials[spk].sales;
+                    if (parsedFinancials[spk].cogs) totalCogs = parsedFinancials[spk].cogs;
+                }
+
+                // Fall back to inventory CSV
+                if (totalSales === 0 && inv && inv.rows && inv.headers) {
                     const soldHeader = inv.headers.find(h => h && h.toLowerCase().includes('sold'));
                     const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
 
                     inv.rows.forEach(row => {
-                        let soldVal = 0;
                         if (soldHeader && row[soldHeader] !== undefined) {
-                            soldVal = parseFloat(String(row[soldHeader]).replace(/[^0-9.-]/g, '')) || 0;
+                            totalSales += parseFloat(String(row[soldHeader]).replace(/[^0-9.-]/g, '')) || 0;
                         }
-                        totalSales += soldVal;
-
                         if (costHeader && row[costHeader] !== undefined) {
-                            const costVal = parseFloat(String(row[costHeader]).replace(/[^0-9.-]/g, '')) || 0;
-                            totalCogs += costVal;
+                            totalCogs += parseFloat(String(row[costHeader]).replace(/[^0-9.-]/g, '')) || 0;
                         }
                     });
                 }
 
-                // Fallback estimates if no inventory data
-                if (totalSales === 0) totalSales = 0;
                 if (totalCogs === 0 && totalSales > 0) totalCogs = totalSales * 0.80;
 
                 const parseNum = (id) => {
@@ -1758,9 +1826,9 @@ html_code = """
                         <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">×</button>
                     </div>
 
-                    <!-- Cash Consolidation -->
+                    <!-- Cash Consolidation (calculated from all sources) -->
                     <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Cash Consolidation</h3>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
                         <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
                             <div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div>
                             <div style="font-size:18px;font-weight:bold;margin-top:4px;">${cooh}</div>
@@ -1772,6 +1840,24 @@ html_code = """
                         <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
                             <div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div>
                             <div style="font-size:18px;font-weight:bold;margin-top:4px;">${brinksDep}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Cash (Payment Types)</div>
+                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${parsedFinancials[spk] && parsedFinancials[spk].cash ? '$' + parsedFinancials[spk].cash.toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Card (Payment Types)</div>
+                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${parsedFinancials[spk] && parsedFinancials[spk].card ? '$' + parsedFinancials[spk].card.toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</div>
+                        </div>
+                    </div>
+                    <div style="background:#064e3b;padding:14px;border-radius:10px;margin-bottom:20px;text-align:center;">
+                        <div style="font-size:12px;color:#6ee7b7;margin-bottom:4px;">Calculated Cash Position</div>
+                        <div style="font-size:13px;color:#a7f3d0;margin-bottom:6px;">End of Last Month + Cash Sales − Brinks Deposits</div>
+                        <div style="font-size:22px;font-weight:bold;color:#34d399;">
+                            $${(parseNum(coohLast) + (parsedFinancials[spk]?.cash || 0) - parseNum(brinksDep)).toLocaleString(undefined, {minimumFractionDigits:2})}
+                        </div>
+                        <div style="font-size:12px;color:#a7f3d0;margin-top:4px;">
+                            Variance vs Actual Cash on Hand: $${(parseNum(cooh) - (parseNum(coohLast) + (parsedFinancials[spk]?.cash || 0) - parseNum(brinksDep))).toLocaleString(undefined, {minimumFractionDigits:2})}
                         </div>
                     </div>
 
