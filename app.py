@@ -1091,8 +1091,26 @@ html_code = """
                         fileName: data.inventory_filename || 'Uploaded_Inventory.csv'
                     };
                 } else {
-                    delete storeInventoryData[spk];
+                    // Try local inventory backup
+                    try {
+                        const localInv = localStorage.getItem('oz_inventory_' + spk);
+                        if (localInv) {
+                            storeInventoryData[spk] = JSON.parse(localInv);
+                        } else {
+                            delete storeInventoryData[spk];
+                        }
+                    } catch(e) {
+                        delete storeInventoryData[spk];
+                    }
                 }
+            }
+
+            // Always try to restore inventory from local backup if not already loaded
+            if (!storeInventoryData[spk]) {
+                try {
+                    const localInv = localStorage.getItem('oz_inventory_' + spk);
+                    if (localInv) storeInventoryData[spk] = JSON.parse(localInv);
+                } catch(e) {}
             }
 
             renderInventoryTable();
@@ -1151,21 +1169,35 @@ html_code = """
             const spk = getSPK();
             storeInventoryData[spk] = { headers: fields, rows: sortedRows, fileName: fileName };
 
+            // Persist inventory locally so it survives reloads
+            try {
+                localStorage.setItem('oz_inventory_' + spk, JSON.stringify(storeInventoryData[spk]));
+            } catch(e) {}
+
             renderInventoryTable();
             showCSVFileInfo(fileName);
+            updateFinancialSummary();
 
-            const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
-            const csvContent = Papa.unparse(sortedRows);
-            const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
+            // Optionally try to push formatted CSV (may fail on large files; UI still works)
+            try {
+                const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
+                const csvContent = Papa.unparse(sortedRows);
+                const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
+                if (base64Data.length < 15000) {  // only attempt if reasonably small
+                    const currentUrl = new URL(window.location.href);
+                    currentUrl.searchParams.set('action', 'save_file');
+                    currentUrl.searchParams.set('spk', spk);
+                    currentUrl.searchParams.set('category', 'green1');
+                    currentUrl.searchParams.set('filename', formattedFileName);
+                    currentUrl.searchParams.set('file_b64', base64Data);
+                    // Don't force navigation; user can Save All if they want persistence
+                    // window.location.href = currentUrl.toString();
+                }
+            } catch(e) {
+                console.log('Formatted CSV push skipped:', e);
+            }
 
-            // Save formatted CSV via query params (works on Streamlit Cloud; CSV is small)
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_file');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('category', 'green1');
-            currentUrl.searchParams.set('filename', formattedFileName);
-            currentUrl.searchParams.set('file_b64', base64Data);
-            window.location.href = currentUrl.toString();
+            alert('Inventory CSV processed. Table is ready. Click "Save All" to store permanently.');
         }
 
         function renderInventoryTable() {
