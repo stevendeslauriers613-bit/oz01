@@ -5,7 +5,6 @@ import logging
 import os
 import sqlite3
 import uuid
-import zlib
 import zipfile
 from datetime import datetime
 import pandas as pd
@@ -15,25 +14,35 @@ import streamlit.components.v1 as components
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-# --- DROPBOX SETUP ---
-DROPBOX_CREDENTIALS_FILE = "dropbox_credentials.json"
+# --- DIRECT HARDCODED DROPBOX CREDENTIALS ---
+DROPBOX_APP_KEY = "blkc7dhojszn2tq"
+DROPBOX_APP_SECRET = "cvw2dfuj7mvzfqo"
 DROPBOX_FOLDER_PATH = "/OZ_Store_Uploads"
 
 
 def get_dropbox_client():
-    """Get authenticated Dropbox client."""
+    """Get authenticated Dropbox client using hardcoded app credentials or saved refresh token."""
     try:
         import dropbox
-        if not os.path.exists(DROPBOX_CREDENTIALS_FILE):
-            return None
-        with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
-            creds = json.load(f)
-        access_token = creds.get("access_token")
-        if not access_token:
-            return None
-        return dropbox.Dropbox(access_token)
+        # Try loading from local credentials file if present
+        refresh_token = None
+        if os.path.exists("dropbox_credentials.json"):
+            with open("dropbox_credentials.json", "r") as f:
+                creds = json.load(f)
+                refresh_token = creds.get("refresh_token")
+
+        if DROPBOX_APP_KEY and DROPBOX_APP_SECRET and refresh_token:
+            return dropbox.Dropbox(
+                app_key=DROPBOX_APP_KEY,
+                app_secret=DROPBOX_APP_SECRET,
+                oauth2_refresh_token=refresh_token
+            )
+        
+        # Fallback to direct app generation or basic client if available
+        return dropbox.Dropbox(app_key=DROPBOX_APP_KEY, app_secret=DROPBOX_APP_SECRET)
     except Exception as e:
-        return None
+        print("Dropbox init error:", e)
+    return None
 
 
 def ensure_dropbox_folder(dbx):
@@ -43,10 +52,15 @@ def ensure_dropbox_folder(dbx):
         dbx.files_create_folder_v2(DROPBOX_FOLDER_PATH)
 
 
-def upload_to_dropbox(dbx, filename, file_data):
-    dropbox_path = f"{DROPBOX_FOLDER_PATH}/{filename}"
-    dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-    return f"dropbox://{dropbox_path}"
+def upload_to_dropbox(dbx, filename, file_data, category, spk):
+    """Uploads file directly to Dropbox persistent storage folder."""
+    try:
+        dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{category}/{filename}"
+        dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+        return f"dropbox://{dropbox_path}"
+    except Exception as e:
+        print("Dropbox upload error:", e)
+        return None
 
 
 # Set page configuration
@@ -68,9 +82,6 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- DATABASE SETUP ---
 DB_FILE = "oz_store.db"
-UPLOAD_DIR = "uploads"
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
 
 
 def init_db():
@@ -137,17 +148,34 @@ if "action" in query_params:
             cursor.execute("DELETE FROM users WHERE username = ?", (username,))
             conn.commit()
 
-    elif action == "save_data":
-        # Handle form persistence natively via query params if needed
+    elif action == "save_checklist":
         spk = query_params.get("spk", "")
         cooh_text = query_params.get("cooh_text", "")
         cooh_date = query_params.get("cooh_date", "")
         chargebacks = query_params.get("chargebacks", "Nothing to report.")
-        checklist = query_params.get("checklist", "{}")
+        checklist_json = query_params.get("checklist_json", "{}")
         if spk:
             cursor.execute(
                 "INSERT OR REPLACE INTO store_data (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json) VALUES (?, ?, ?, ?, ?)",
-                (spk, cooh_text, cooh_date, chargebacks, checklist)
+                (spk, cooh_text, cooh_date, chargebacks, checklist_json)
+            )
+            conn.commit()
+
+    elif action == "save_file":
+        spk = query_params.get("spk", "")
+        category = query_params.get("category", "")
+        filename = query_params.get("filename", "")
+        file_b64 = query_params.get("file_b64", "")
+        if spk and filename and file_b64:
+            file_bytes = base64.b64decode(file_b64)
+            dbx = get_dropbox_client()
+            filepath = ""
+            if dbx:
+                ensure_dropbox_folder(dbx)
+                filepath = upload_to_dropbox(dbx, filename, file_bytes, category, spk) or ""
+            cursor.execute(
+                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+                (spk, category, filename, filepath)
             )
             conn.commit()
 
@@ -165,11 +193,6 @@ if "action" in query_params:
                             dbx.files_delete_v2(filepath.replace("dropbox://", ""))
                         except Exception:
                             pass
-                elif os.path.exists(filepath):
-                    try:
-                        os.remove(filepath)
-                    except Exception:
-                        pass
             cursor.execute("DELETE FROM store_files WHERE id = ?", (file_id,))
             conn.commit()
 
@@ -678,7 +701,7 @@ html_code = """
                                         <input type="file" id="gas1-file" multiple onchange="handleItemFiles('gas1', this)" class="hidden">
                                         <div class="flex gap-1">
                                             <button type="button" onclick="document.getElementById('gas1-file').click()" class="bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] py-1 px-2.5 rounded border border-zinc-300">📎 Browse</button>
-                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-red-200 transition" title="Clear uploaded files">🗑️</button>
+                                            <button type="button" onclick="clearUploadField('gas1')" class="bg-red-50 hover:bg-red-100 text-red-600 text-[11px] font-bold px-1.5 py-1 rounded border border-zinc-200 transition" title="Clear uploaded files">🗑️</button>
                                         </div>
                                     </div>
                                     <div id="files-gas1" class="flex flex-wrap gap-1.5 mt-1 text-[11px] text-zinc-600">No files</div>
@@ -1087,19 +1110,9 @@ html_code = """
             };
 
             const checklistData = { checkboxes: checkboxes, notes: notes, dates: dates };
-            const inv = storeInventoryData[spk] || null;
-
-            persistentStoreData[spk] = {
-                cooh_text: notes['cooh'],
-                cooh_date: dates['cooh'],
-                chargebacks_text: notes['chargebacks'],
-                checklist_json: checklistData,
-                inventory_data: inv ? { headers: inv.headers, rows: inv.rows } : null,
-                inventory_filename: inv ? inv.fileName : ""
-            };
 
             try {
-                localStorage.setItem('oz_data_' + spk, JSON.stringify(persistentStoreData[spk]));
+                localStorage.setItem('oz_data_' + spk, JSON.stringify(checklistData));
             } catch(e) {}
 
             const badge = document.getElementById('store-completion-badge');
@@ -1110,6 +1123,15 @@ html_code = """
                     badge.textContent = `Checklist: ${checked}/10 Completed`;
                 }, 2000);
             }
+
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.set('action', 'save_checklist');
+            currentUrl.searchParams.set('spk', spk);
+            currentUrl.searchParams.set('cooh_text', notes['cooh']);
+            currentUrl.searchParams.set('cooh_date', dates['cooh']);
+            currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
+            currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
+            window.history.replaceState({}, '', currentUrl.toString());
         }
 
         function updateCompletionBadge() {
@@ -1148,36 +1170,34 @@ html_code = """
         function handleItemFiles(cat, inputElem) {
             if (inputElem.files && inputElem.files.length > 0) {
                 const spk = getSPK();
-                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-
                 Array.from(inputElem.files).forEach((file) => {
-                    storedFilesMap[spk][cat].push({ id: 'local_' + Date.now() + Math.random(), filename: file.name });
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const arrayBuffer = e.target.result;
+                        const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                        
+                        const currentUrl = new URL(window.location.href);
+                        currentUrl.searchParams.set('action', 'save_file');
+                        currentUrl.searchParams.set('spk', spk);
+                        currentUrl.searchParams.set('category', cat);
+                        currentUrl.searchParams.set('filename', file.name);
+                        currentUrl.searchParams.set('file_b64', base64String);
+                        window.location.href = currentUrl.toString();
+                    };
+                    reader.readAsArrayBuffer(file);
                 });
-                renderStoredFiles();
-                scheduleAutoSave();
                 inputElem.value = '';
             }
         }
 
-        function handleRemoveFile(cat, fileId) {
-            const spk = getSPK();
-            if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
-                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => f.id !== fileId);
-                renderStoredFiles();
-                scheduleAutoSave();
+        function handleRemoveFile(fileId) {
+            if (confirm(`Are you sure you want to delete this file?`)) {
+                window.location.href = `?action=delete_file&file_id=${fileId}`;
             }
         }
 
         function clearUploadField(cat) {
-            if (confirm(`Clear all files for this category?`)) {
-                const spk = getSPK();
-                if (storedFilesMap[spk]) {
-                    storedFilesMap[spk][cat] = [];
-                }
-                renderStoredFiles();
-                scheduleAutoSave();
-            }
+            alert(`To clear category files, click the delete (×) button next to each individual attached file.`);
         }
 
         function renderStoredFiles() {
@@ -1194,7 +1214,7 @@ html_code = """
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
                         let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
+                        chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
                         chip += `</span>`;
                         return chip;
                     }).join('');
@@ -1202,7 +1222,7 @@ html_code = """
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
                             let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
+                            chip += ` <button type="button" onclick="handleRemoveFile(${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
                             chip += `</span>`;
                             return chip;
                         }).join('');
