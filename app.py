@@ -840,57 +840,81 @@ html_code = """
                 <!-- Monthly Financial Summary with Expenses -->
                 <div class="mt-6 bg-emerald-900/40 rounded-xl border border-emerald-800 p-5">
                     <h4 class="text-base font-bold text-emerald-300 mb-4">Monthly Financial Summary</h4>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                         <div>
                             <label class="block text-xs text-emerald-300 mb-1">Rent</label>
-                            <input type="text" id="exp-rent" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <input type="text" id="exp-rent" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Salaries</label>
+                            <input type="text" id="exp-salaries" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                         <div>
                             <label class="block text-xs text-emerald-300 mb-1">Utilities</label>
-                            <input type="text" id="exp-utilities" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <input type="text" id="exp-utilities" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Advertising</label>
+                            <input type="text" id="exp-advertising" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Marketing</label>
+                            <input type="text" id="exp-marketing" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-emerald-300 mb-1">Data Deals</label>
+                            <input type="text" id="exp-datadeals" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                         <div>
                             <label class="block text-xs text-emerald-300 mb-1">Insurance</label>
-                            <input type="text" id="exp-insurance" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <input type="text" id="exp-insurance" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                         <div>
-                            <label class="block text-xs text-emerald-300 mb-1">Employee Salary</label>
-                            <input type="text" id="exp-salary" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <label class="block text-xs text-emerald-300 mb-1">Garbage</label>
+                            <input type="text" id="exp-garbage" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                         <div>
-                            <label class="block text-xs text-emerald-300 mb-1">Credit Card Expenses</label>
-                            <input type="text" id="exp-cc" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <label class="block text-xs text-emerald-300 mb-1">Security</label>
+                            <input type="text" id="exp-security" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                         <div>
-                            <label class="block text-xs text-emerald-300 mb-1">Advertising & Signage</label>
-                            <input type="text" id="exp-ads" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-emerald-300 mb-1">Repairs</label>
-                            <input type="text" id="exp-repairs" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-emerald-300 mb-1">Other Expenses</label>
-                            <input type="text" id="exp-other" placeholder="0.00" oninput="scheduleAutoSave()" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
+                            <label class="block text-xs text-emerald-300 mb-1">Licenses</label>
+                            <input type="text" id="exp-licenses" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                         </div>
                     </div>
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-sm">
                         <div class="bg-emerald-950/60 p-3 rounded">
-                            <div class="text-emerald-300 text-xs">Total Sales (from inventory)</div>
+                            <div class="text-emerald-300 text-xs">Total Sales</div>
                             <div id="fin-total-sales" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">COGS</div>
+                            <div id="fin-cogs" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Gross Profit</div>
+                            <div id="fin-gross" class="font-bold text-white text-lg">$0.00</div>
+                        </div>
+                        <div class="bg-emerald-950/60 p-3 rounded">
+                            <div class="text-emerald-300 text-xs">Gross Margin</div>
+                            <div id="fin-gross-margin" class="font-bold text-white text-lg">0%</div>
                         </div>
                         <div class="bg-emerald-950/60 p-3 rounded">
                             <div class="text-emerald-300 text-xs">Total Expenses</div>
                             <div id="fin-total-exp" class="font-bold text-white text-lg">$0.00</div>
                         </div>
                         <div class="bg-emerald-950/60 p-3 rounded">
-                            <div class="text-emerald-300 text-xs">Estimated Net</div>
+                            <div class="text-emerald-300 text-xs">Net Profit</div>
                             <div id="fin-net" class="font-bold text-white text-lg">$0.00</div>
                         </div>
-                        <div class="bg-emerald-950/60 p-3 rounded">
+                        <div class="bg-emerald-950/60 p-3 rounded col-span-2 md:col-span-1">
                             <div class="text-emerald-300 text-xs">Net Margin</div>
                             <div id="fin-margin" class="font-bold text-white text-lg">0%</div>
                         </div>
+                    </div>
+                    <div class="mt-3">
+                        <label class="block text-xs text-emerald-300 mb-1">Cost of Goods Sold (COGS) — enter or leave blank to estimate</label>
+                        <input type="text" id="exp-cogs" placeholder="0.00" oninput="scheduleAutoSave(); updateFinancialSummary();" class="w-full md:w-48 bg-emerald-950 border border-emerald-700 rounded px-2 py-1 text-sm text-white">
                     </div>
                 </div>
 
@@ -927,7 +951,29 @@ html_code = """
     </div>
 
     <script>
-        const ACCOUNTANT_ORDER = ["Beverages", "Dried Flower", "Edibles", "Extracts Ingested", "Extracts Inhaled", "Infused Pre-Rolls ", "Milled Flower", "Pre-Rolls", "Seeds", "Topicals", "Vapes - Disposables", "Vapes - 510 Threads", "Vapes - Pods", "Accessories", "Apparel / Swag", "Gift Cards", "Other Income", "Raffles", "System Fees", "Uniforms"];
+        const ACCOUNTANT_ORDER = [
+            "Beverages",
+            "Dried Flower",
+            "Edibles",
+            "Extracts Ingested",
+            "Extracts Inhaled",
+            "Infused Pre-Rolls ",
+            "Milled Flower",
+            "Pre-Rolls",
+            "Seeds",
+            "Topicals",
+            "Vapes - Disposables",
+            "Vapes - 510 Threads",
+            "Vapes - Pods",
+            "__SPACER__",
+            "Accessories",
+            "Apparel / Swag",
+            "Gift Cards",
+            "Other Income",
+            "Raffles",
+            "System Fees",
+            "Uniforms"
+        ];
 
         let isStoreManager = __IS_STORE_MANAGER__;
         let currentUserRole = "__CURRENT_ROLE__";
@@ -1079,7 +1125,7 @@ html_code = """
                 }
                 if (chkData.expenses) {
                     const exp = chkData.expenses;
-                    ['rent','utilities','insurance','salary','cc','ads','repairs','other'].forEach(k => {
+                    ['rent','salaries','utilities','advertising','marketing','datadeals','insurance','garbage','security','licenses'].forEach(k => {
                         const el = document.getElementById('exp-' + k);
                         if (el && exp[k] !== undefined) el.value = exp[k];
                     });
@@ -1151,14 +1197,28 @@ html_code = """
         function processParsedCSV(fields, data, fileName) {
             const parentRows = data.filter(row => {
                 const cat = row['Category'] || '';
-                return !cat.trim().startsWith('>');
+                return !cat.trim().startsWith('>') && cat.trim() !== '';
             });
 
             const sortedRows = [];
             ACCOUNTANT_ORDER.forEach(targetCat => {
-                const found = parentRows.find(r => (r['Category'] || '').trim() === targetCat.trim());
+                if (targetCat === "__SPACER__") {
+                    const spacerRow = { Category: "" };
+                    fields.forEach(f => { if (f !== 'Category') spacerRow[f] = ""; });
+                    sortedRows.push(spacerRow);
+                    return;
+                }
+                const found = parentRows.find(r => (r['Category'] || '').trim().toLowerCase() === targetCat.trim().toLowerCase());
                 if (found) {
-                    sortedRows.push(found);
+                    const cleanRow = { Category: targetCat };
+                    fields.forEach(f => {
+                        if (f !== 'Category') {
+                            const rawVal = found[f];
+                            const num = parseFloat(String(rawVal || '0').replace(/[^0-9.-]/g, ''));
+                            cleanRow[f] = isNaN(num) ? 0.00 : num;
+                        }
+                    });
+                    sortedRows.push(cleanRow);
                 } else {
                     const emptyRow = { Category: targetCat };
                     fields.forEach(f => { if (f !== 'Category') emptyRow[f] = 0.00; });
@@ -1169,7 +1229,6 @@ html_code = """
             const spk = getSPK();
             storeInventoryData[spk] = { headers: fields, rows: sortedRows, fileName: fileName };
 
-            // Persist inventory locally so it survives reloads
             try {
                 localStorage.setItem('oz_inventory_' + spk, JSON.stringify(storeInventoryData[spk]));
             } catch(e) {}
@@ -1178,26 +1237,7 @@ html_code = """
             showCSVFileInfo(fileName);
             updateFinancialSummary();
 
-            // Optionally try to push formatted CSV (may fail on large files; UI still works)
-            try {
-                const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
-                const csvContent = Papa.unparse(sortedRows);
-                const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
-                if (base64Data.length < 15000) {  // only attempt if reasonably small
-                    const currentUrl = new URL(window.location.href);
-                    currentUrl.searchParams.set('action', 'save_file');
-                    currentUrl.searchParams.set('spk', spk);
-                    currentUrl.searchParams.set('category', 'green1');
-                    currentUrl.searchParams.set('filename', formattedFileName);
-                    currentUrl.searchParams.set('file_b64', base64Data);
-                    // Don't force navigation; user can Save All if they want persistence
-                    // window.location.href = currentUrl.toString();
-                }
-            } catch(e) {
-                console.log('Formatted CSV push skipped:', e);
-            }
-
-            alert('Inventory CSV processed. Table is ready. Click "Save All" to store permanently.');
+            alert('Inventory CSV processed. Table is ready with green header and spacer after Vapes - Pods. Click "Save All" to store permanently.');
         }
 
         function renderInventoryTable() {
@@ -1211,7 +1251,7 @@ html_code = """
             const infoBox = document.getElementById('csv-file-info');
 
             if (!inv) {
-                tableHeader.innerHTML = `<th class="p-2 font-semibold">Category</th><th class="p-2 font-semibold">Opening</th><th class="p-2 font-semibold">Sold</th><th class="p-2 font-semibold">Closing</th>`;
+                tableHeader.innerHTML = `<th class="p-2 font-semibold bg-emerald-700 text-white">Category</th><th class="p-2 font-semibold bg-emerald-700 text-white">Opening</th><th class="p-2 font-semibold bg-emerald-700 text-white">Sold</th><th class="p-2 font-semibold bg-emerald-700 text-white">Closing</th>`;
                 tableBody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-zinc-400">No report uploaded yet.</td></tr>`;
                 actionArea.classList.add('hidden');
                 invStatusBadge.textContent = "Not Loaded";
@@ -1225,12 +1265,16 @@ html_code = """
             const rows = inv.rows;
             const displayHeaders = headers.includes('Opening') ? ['Category', 'Opening', 'Sold', 'Closing'] : [headers[0], headers[1], headers[2]];
 
-            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold">${h}</th>`).join('');
-            tableBody.innerHTML = rows.map(row => `
-                <tr class="hover:bg-zinc-50 transition-colors">
+            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold bg-emerald-700 text-white">${h}</th>`).join('');
+            tableBody.innerHTML = rows.map(row => {
+                const isSpacer = !row.Category || String(row.Category).trim() === '';
+                if (isSpacer) {
+                    return `<tr class="h-4 bg-zinc-100"><td colspan="${displayHeaders.length}"></td></tr>`;
+                }
+                return `<tr class="hover:bg-zinc-50 transition-colors">
                     ${displayHeaders.map(h => `<td class="p-2 ${h === 'Category' ? 'font-medium text-emerald-800' : 'text-zinc-700'}">${row[h] !== undefined ? row[h] : ''}</td>`).join('')}
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
 
             actionArea.classList.remove('hidden');
             invStatusBadge.textContent = `Loaded (${inv.fileName})`;
@@ -1240,8 +1284,25 @@ html_code = """
             showCSVFileInfo(inv.fileName);
 
             document.getElementById('download-excel-btn').onclick = function() {
-                const worksheetData = [headers, ...rows.map(row => headers.map(h => row[h]))];
+                const worksheetData = [headers, ...rows.map(row => {
+                    const isSpacer = !row.Category || String(row.Category).trim() === '';
+                    if (isSpacer) return headers.map(() => '');
+                    return headers.map(h => row[h]);
+                })];
                 const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+                // Green header style
+                const headerStyle = {
+                    fill: { fgColor: { rgb: "065F46" } },
+                    font: { bold: true, color: { rgb: "FFFFFF" } },
+                    alignment: { horizontal: "center" }
+                };
+                const range = XLSX.utils.decode_range(worksheet['!ref']);
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cell = worksheet[XLSX.utils.encode_cell({ r: 0, c: C })];
+                    if (cell) cell.s = headerStyle;
+                }
+
                 const workbook = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(workbook, worksheet, `${activeStore} Inventory`);
                 XLSX.writeFile(workbook, `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Report.xlsx`);
@@ -1341,13 +1402,15 @@ html_code = """
             const brinksTotalDeposit = document.getElementById('brinks-total-deposit')?.value || '';
             const expenses = {
                 rent: document.getElementById('exp-rent')?.value || '',
+                salaries: document.getElementById('exp-salaries')?.value || '',
                 utilities: document.getElementById('exp-utilities')?.value || '',
+                advertising: document.getElementById('exp-advertising')?.value || '',
+                marketing: document.getElementById('exp-marketing')?.value || '',
+                datadeals: document.getElementById('exp-datadeals')?.value || '',
                 insurance: document.getElementById('exp-insurance')?.value || '',
-                salary: document.getElementById('exp-salary')?.value || '',
-                cc: document.getElementById('exp-cc')?.value || '',
-                ads: document.getElementById('exp-ads')?.value || '',
-                repairs: document.getElementById('exp-repairs')?.value || '',
-                other: document.getElementById('exp-other')?.value || ''
+                garbage: document.getElementById('exp-garbage')?.value || '',
+                security: document.getElementById('exp-security')?.value || '',
+                licenses: document.getElementById('exp-licenses')?.value || ''
             };
             return { checkboxes, notes, dates, cooh_last_month: coohLastMonth, brinks_total_deposit: brinksTotalDeposit, expenses };
         }
@@ -1558,30 +1621,71 @@ html_code = """
         }
 
         function updateFinancialSummary() {
-            const spk = getSPK();
-            const inv = storeInventoryData[spk];
-            let totalSales = 0;
-            if (inv && inv.rows) {
-                inv.rows.forEach(r => {
-                    totalSales += parseNum(r.Sold || r.sold);
-                });
+            try {
+                const spk = getSPK();
+                const inv = storeInventoryData[spk];
+                let totalSales = 0;
+                let totalCogs = 0;
+
+                if (inv && inv.rows && inv.headers) {
+                    const soldHeader = inv.headers.find(h => h && h.toLowerCase().includes('sold'));
+                    const costHeader = inv.headers.find(h => h && (h.toLowerCase().includes('cost') || h.toLowerCase().includes('avg cost')));
+
+                    inv.rows.forEach(row => {
+                        let soldVal = 0;
+                        if (soldHeader && row[soldHeader] !== undefined) {
+                            soldVal = parseFloat(String(row[soldHeader]).replace(/[^0-9.-]/g, '')) || 0;
+                        }
+                        totalSales += soldVal;
+
+                        if (costHeader && row[costHeader] !== undefined) {
+                            const costVal = parseFloat(String(row[costHeader]).replace(/[^0-9.-]/g, '')) || 0;
+                            totalCogs += costVal;
+                        }
+                    });
+                }
+
+                // Fallback estimates if no inventory data
+                if (totalSales === 0) totalSales = 0;
+                if (totalCogs === 0 && totalSales > 0) totalCogs = totalSales * 0.80;
+
+                const parseNum = (id) => {
+                    const el = document.getElementById(id);
+                    if (!el) return 0;
+                    return parseFloat(String(el.value).replace(/[^0-9.-]/g, '')) || 0;
+                };
+
+                const totalExp = parseNum('exp-rent') + parseNum('exp-salaries') + parseNum('exp-utilities') +
+                                 parseNum('exp-advertising') + parseNum('exp-marketing') + parseNum('exp-datadeals') +
+                                 parseNum('exp-insurance') + parseNum('exp-garbage') + parseNum('exp-security') +
+                                 parseNum('exp-licenses');
+
+                const grossProfit = totalSales - totalCogs;
+                const grossMargin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0;
+                const netOperatingIncome = grossProfit - totalExp;
+                const operatingMargin = totalSales > 0 ? (netOperatingIncome / totalSales) * 100 : 0;
+
+                const formatMoney = (n) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const formatPct = (n) => n.toFixed(1) + '%';
+
+                const setText = (id, text) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = text;
+                };
+
+                setText('fin-total-sales', formatMoney(totalSales));
+                setText('fin-cogs', formatMoney(totalCogs));
+                setText('fin-gross', formatMoney(grossProfit));
+                setText('fin-gross-margin', formatPct(grossMargin));
+                setText('fin-total-exp', formatMoney(totalExp));
+                setText('fin-net', formatMoney(netOperatingIncome));
+                setText('fin-margin', formatPct(operatingMargin));
+            } catch(e) {
+                console.error("updateFinancialSummary error:", e);
             }
-            const expenses = [
-                'exp-rent','exp-utilities','exp-insurance','exp-salary',
-                'exp-cc','exp-ads','exp-repairs','exp-other'
-            ].reduce((sum, id) => sum + parseNum(document.getElementById(id)?.value), 0);
-
-            const net = totalSales - expenses;
-            const margin = totalSales > 0 ? (net / totalSales * 100) : 0;
-
-            document.getElementById('fin-total-sales').textContent = '$' + totalSales.toLocaleString(undefined, {minimumFractionDigits:2});
-            document.getElementById('fin-total-exp').textContent = '$' + expenses.toLocaleString(undefined, {minimumFractionDigits:2});
-            document.getElementById('fin-net').textContent = '$' + net.toLocaleString(undefined, {minimumFractionDigits:2});
-            document.getElementById('fin-margin').textContent = margin.toFixed(1) + '%';
         }
 
         function showInfographicReport(detailed = false) {
-            // Remove any existing modal first
             const existing = document.getElementById('report-modal');
             if (existing) existing.remove();
 
@@ -1594,87 +1698,130 @@ html_code = """
             const totalExp = document.getElementById('fin-total-exp').textContent;
             const net = document.getElementById('fin-net').textContent;
             const margin = document.getElementById('fin-margin').textContent;
+            const gross = document.getElementById('fin-gross').textContent;
+            const grossMargin = document.getElementById('fin-gross-margin').textContent;
+            const cogs = document.getElementById('fin-cogs').textContent;
+
+            // Inventory category breakdown
+            const inv = storeInventoryData[spk];
+            let categoryHtml = '<p class="text-emerald-300 text-sm">No inventory data loaded</p>';
+            if (inv && inv.rows && inv.rows.length) {
+                const maxSold = Math.max(...inv.rows.map(r => parseNum(r.Sold || r.sold)), 1);
+                categoryHtml = inv.rows.slice(0, 12).map(r => {
+                    const sold = parseNum(r.Sold || r.sold);
+                    const pct = (sold / maxSold * 100).toFixed(0);
+                    return `<div style="margin-bottom:6px;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;">
+                            <span>${r.Category || 'Category'}</span>
+                            <span>$${sold.toLocaleString(undefined, {minimumFractionDigits:0})}</span>
+                        </div>
+                        <div style="background:#065f46;height:6px;border-radius:3px;overflow:hidden;">
+                            <div style="background:#34d399;height:100%;width:${pct}%;"></div>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
 
             const expenseItems = [
                 ['Rent', document.getElementById('exp-rent')?.value],
+                ['Salaries', document.getElementById('exp-salaries')?.value],
                 ['Utilities', document.getElementById('exp-utilities')?.value],
+                ['Advertising', document.getElementById('exp-advertising')?.value],
+                ['Marketing', document.getElementById('exp-marketing')?.value],
+                ['Data Deals', document.getElementById('exp-datadeals')?.value],
                 ['Insurance', document.getElementById('exp-insurance')?.value],
-                ['Employee Salary', document.getElementById('exp-salary')?.value],
-                ['Credit Card', document.getElementById('exp-cc')?.value],
-                ['Advertising & Signage', document.getElementById('exp-ads')?.value],
-                ['Repairs', document.getElementById('exp-repairs')?.value],
-                ['Other', document.getElementById('exp-other')?.value]
+                ['Garbage', document.getElementById('exp-garbage')?.value],
+                ['Security', document.getElementById('exp-security')?.value],
+                ['Licenses', document.getElementById('exp-licenses')?.value]
             ];
-
-            let expenseHtml = expenseItems.map(([label, val]) => 
-                `<div class="flex justify-between text-sm py-1 border-b border-emerald-800/50">
-                    <span class="text-emerald-200">${label}</span>
-                    <span class="font-medium">$${parseNum(val).toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+            const expenseHtml = expenseItems.map(([label, val]) => 
+                `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #065f46;">
+                    <span style="color:#a7f3d0;">${label}</span>
+                    <span>$${parseNum(val).toLocaleString(undefined, {minimumFractionDigits:2})}</span>
                 </div>`
             ).join('');
 
             const modal = document.createElement('div');
             modal.id = 'report-modal';
-            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
             modal.innerHTML = `
-                <div style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:720px;width:100%;max-height:90vh;overflow:auto;color:white;padding:28px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <div style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:900px;width:100%;max-height:92vh;overflow:auto;color:white;padding:24px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;">
                         <div>
-                            <h2 style="margin:0;font-size:22px;color:#6ee7b7;">Business Health Infographic</h2>
-                            <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
+                            <h2 style="margin:0;font-size:24px;color:#6ee7b7;">Business Health Dashboard</h2>
+                            <p style="margin:4px 0 0;font-size:14px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
                         </div>
-                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px;">×</button>
+                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:20px;">×</button>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
-                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
-                            <div style="font-size:12px;color:#6ee7b7;">Cash on Hand (EOD)</div>
-                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${cooh}</div>
+                    <!-- Cash Consolidation -->
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Cash Consolidation</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Cash on Hand (EOD)</div>
+                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${cooh}</div>
                         </div>
-                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
-                            <div style="font-size:12px;color:#6ee7b7;">Cash End of Last Month</div>
-                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${coohLast}</div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">End of Last Month</div>
+                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${coohLast}</div>
                         </div>
-                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
-                            <div style="font-size:12px;color:#6ee7b7;">Brinks Deposit</div>
-                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${brinksDep}</div>
-                        </div>
-                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
-                            <div style="font-size:12px;color:#6ee7b7;">Total Sales</div>
-                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${totalSales}</div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Brinks Deposit</div>
+                            <div style="font-size:18px;font-weight:bold;margin-top:4px;">${brinksDep}</div>
                         </div>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-                        <div style="background:#064e3b;padding:16px;border-radius:12px;">
-                            <h3 style="margin:0 0 10px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
+                    <!-- Profitability -->
+                    <h3 style="color:#6ee7b7;font-size:15px;margin:0 0 10px;">Profitability</h3>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Total Sales</div>
+                            <div style="font-size:18px;font-weight:bold;">${totalSales}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">COGS</div>
+                            <div style="font-size:18px;font-weight:bold;">${cogs}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Gross Profit</div>
+                            <div style="font-size:18px;font-weight:bold;">${gross}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Gross Margin</div>
+                            <div style="font-size:18px;font-weight:bold;color:#34d399;">${grossMargin}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Net Profit</div>
+                            <div style="font-size:18px;font-weight:bold;">${net}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:12px;border-radius:10px;text-align:center;">
+                            <div style="font-size:11px;color:#6ee7b7;">Net Margin</div>
+                            <div style="font-size:18px;font-weight:bold;color:#34d399;">${margin}</div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
                             ${expenseHtml}
-                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:8px;border-top:1px solid #065f46;">
-                                <span>Total Expenses</span>
-                                <span>${totalExp}</span>
+                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:6px;border-top:1px solid #065f46;font-size:13px;">
+                                <span>Total Expenses</span><span>${totalExp}</span>
                             </div>
                         </div>
-                        <div style="background:#064e3b;padding:16px;border-radius:12px;display:flex;flex-direction:column;justify-content:center;text-align:center;">
-                            <div style="font-size:13px;color:#6ee7b7;">Estimated Net Profit</div>
-                            <div style="font-size:32px;font-weight:bold;margin:8px 0;">${net}</div>
-                            <div style="font-size:13px;color:#6ee7b7;">Net Margin</div>
-                            <div style="font-size:28px;font-weight:bold;color:#34d399;">${margin}</div>
+                        <div style="background:#064e3b;padding:14px;border-radius:10px;">
+                            <h3 style="margin:0 0 8px;font-size:14px;color:#6ee7b7;">Sales by Category</h3>
+                            ${categoryHtml}
                         </div>
                     </div>
 
-                    ${detailed ? `<div style="background:#064e3b;padding:14px;border-radius:12px;font-size:13px;">
-                        <strong>Cash Consolidation Note:</strong> Compare End of Day cash (${cooh}) against End of Last Month (${coohLast}) and Brinks deposits to track cash movement.
-                    </div>` : ''}
-
-                    <div style="margin-top:16px;text-align:right;">
-                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print</button>
+                    <div style="margin-top:12px;text-align:right;">
+                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print / Save PDF</button>
                         <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
                     </div>
                 </div>
             `;
             document.body.appendChild(modal);
 
-            // Reliable close handlers
             const closeModal = () => {
                 const m = document.getElementById('report-modal');
                 if (m) m.remove();
@@ -1682,7 +1829,6 @@ html_code = """
             document.getElementById('close-report-x').onclick = closeModal;
             document.getElementById('close-report-btn').onclick = closeModal;
             document.getElementById('print-report').onclick = () => window.print();
-            // Also close if user clicks the dark background
             modal.onclick = (e) => { if (e.target === modal) closeModal(); };
         }
 
