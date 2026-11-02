@@ -1245,13 +1245,27 @@ html_code = """
         function scheduleAutoSave() {
             if (saveTimeout) clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => {
-                saveAllData(true);
-            }, 800);
+                saveLocalOnly();
+            }, 500);
         }
 
-        function saveAllData(isSilent = false) {
+        function saveLocalOnly() {
             const spk = getSPK();
+            const checklistData = buildChecklistData();
+            try {
+                localStorage.setItem('oz_data_' + spk, JSON.stringify(checklistData));
+            } catch(e) {}
+            const badge = document.getElementById('store-completion-badge');
+            if (badge) {
+                const checked = Object.values(checklistData.checkboxes).filter(Boolean).length;
+                badge.textContent = `✓ Local | Checklist: ${checked}/10`;
+                setTimeout(() => {
+                    badge.textContent = `Checklist: ${checked}/10 Completed`;
+                }, 1500);
+            }
+        }
 
+        function buildChecklistData() {
             const checkboxes = {
                 'brinks': document.getElementById('brinks-chk')?.checked || false,
                 'green1': document.getElementById('green1-chk')?.checked || false,
@@ -1264,7 +1278,6 @@ html_code = """
                 'gas1': document.getElementById('gas1-chk')?.checked || false,
                 'gas2': document.getElementById('gas2-chk')?.checked || false
             };
-
             const notes = {
                 'cooh': document.getElementById('cooh-text')?.value || '',
                 'brinks': document.getElementById('brinks-note')?.value || '',
@@ -1279,15 +1292,12 @@ html_code = """
                 'gas1': document.getElementById('gas1-note')?.value || '',
                 'gas2': document.getElementById('gas2-note')?.value || ''
             };
-
             const dates = {
                 'cooh': document.getElementById('cooh-date')?.value || '',
                 'brinks': document.getElementById('brinks-date')?.value || ''
             };
-
             const coohLastMonth = document.getElementById('cooh-last-month')?.value || '';
             const brinksTotalDeposit = document.getElementById('brinks-total-deposit')?.value || '';
-
             const expenses = {
                 rent: document.getElementById('exp-rent')?.value || '',
                 utilities: document.getElementById('exp-utilities')?.value || '',
@@ -1298,15 +1308,12 @@ html_code = """
                 repairs: document.getElementById('exp-repairs')?.value || '',
                 other: document.getElementById('exp-other')?.value || ''
             };
+            return { checkboxes, notes, dates, cooh_last_month: coohLastMonth, brinks_total_deposit: brinksTotalDeposit, expenses };
+        }
 
-            const checklistData = { 
-                checkboxes: checkboxes, 
-                notes: notes, 
-                dates: dates,
-                cooh_last_month: coohLastMonth,
-                brinks_total_deposit: brinksTotalDeposit,
-                expenses: expenses
-            };
+        function saveAllData(isSilent = false) {
+            const spk = getSPK();
+            const checklistData = buildChecklistData();
 
             // Include inventory so it persists
             const inv = storeInventoryData[spk] || null;
@@ -1319,26 +1326,28 @@ html_code = """
 
             const badge = document.getElementById('store-completion-badge');
             if (badge) {
-                const checked = Object.values(checkboxes).filter(Boolean).length;
+                const checked = Object.values(checklistData.checkboxes).filter(Boolean).length;
                 badge.textContent = isSilent ? `✓ Saved | Checklist: ${checked}/10` : `Saved Successfully! Checklist: ${checked}/10`;
                 setTimeout(() => {
                     badge.textContent = `Checklist: ${checked}/10 Completed`;
                 }, 2000);
             }
 
-            // Navigate so Streamlit backend processes the save (works on Streamlit Cloud)
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_checklist');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('cooh_text', notes['cooh']);
-            currentUrl.searchParams.set('cooh_date', dates['cooh']);
-            currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
-            currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
-            if (inventoryJson) {
-                currentUrl.searchParams.set('inventory_json', inventoryJson);
-                currentUrl.searchParams.set('inventory_filename', inventoryFilename);
+            // Only navigate (full save to database) when explicitly requested
+            if (!isSilent) {
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('action', 'save_checklist');
+                currentUrl.searchParams.set('spk', spk);
+                currentUrl.searchParams.set('cooh_text', checklistData.notes['cooh']);
+                currentUrl.searchParams.set('cooh_date', checklistData.dates['cooh']);
+                currentUrl.searchParams.set('chargebacks', checklistData.notes['chargebacks']);
+                currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
+                if (inventoryJson) {
+                    currentUrl.searchParams.set('inventory_json', inventoryJson);
+                    currentUrl.searchParams.set('inventory_filename', inventoryFilename);
+                }
+                window.location.href = currentUrl.toString();
             }
-            window.location.href = currentUrl.toString();
         }
 
         function updateCompletionBadge() {
@@ -1531,6 +1540,10 @@ html_code = """
         }
 
         function showInfographicReport(detailed = false) {
+            // Remove any existing modal first
+            const existing = document.getElementById('report-modal');
+            if (existing) existing.remove();
+
             updateFinancialSummary();
             const spk = getSPK();
             const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
@@ -1560,6 +1573,7 @@ html_code = """
             ).join('');
 
             const modal = document.createElement('div');
+            modal.id = 'report-modal';
             modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
             modal.innerHTML = `
                 <div style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:720px;width:100%;max-height:90vh;overflow:auto;color:white;padding:28px;">
@@ -1568,7 +1582,7 @@ html_code = """
                             <h2 style="margin:0;font-size:22px;color:#6ee7b7;">Business Health Infographic</h2>
                             <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
                         </div>
-                        <button onclick="this.closest('div').parentElement.remove()" style="background:#065f46;border:none;color:white;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px;">×</button>
+                        <button id="close-report-x" style="background:#065f46;border:none;color:white;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px;">×</button>
                     </div>
 
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
@@ -1612,12 +1626,23 @@ html_code = """
                     </div>` : ''}
 
                     <div style="margin-top:16px;text-align:right;">
-                        <button onclick="window.print()" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print</button>
-                        <button onclick="this.closest('div').parentElement.remove()" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
+                        <button id="print-report" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print</button>
+                        <button id="close-report-btn" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
                     </div>
                 </div>
             `;
             document.body.appendChild(modal);
+
+            // Reliable close handlers
+            const closeModal = () => {
+                const m = document.getElementById('report-modal');
+                if (m) m.remove();
+            };
+            document.getElementById('close-report-x').onclick = closeModal;
+            document.getElementById('close-report-btn').onclick = closeModal;
+            document.getElementById('print-report').onclick = () => window.print();
+            // Also close if user clicks the dark background
+            modal.onclick = (e) => { if (e.target === modal) closeModal(); };
         }
 
         function generateReport() {
