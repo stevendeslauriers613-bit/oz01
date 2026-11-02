@@ -929,7 +929,7 @@ html_code = """
                     </div>
 
                     <div class="text-xs text-emerald-200/70">
-                        <p>Total Sales and Cost of Goods Sold (COGS) are auto-calculated from your uploaded Greenline inventory CSV. Operating Expenses are fully editable above and saved automatically when you press <b>Save All</b>.</p>
+                        <p>Sales and cost come from the uploaded Financials CSV (Net sales and Cost). Cash consolidation comes from the Payment Types CSV plus the cash and Brinks amounts you type. Expenses are the boxes above.</p>
                     </div>
                 </div>
             </div>
@@ -975,6 +975,136 @@ html_code = """
         let storedFilesMap = REPLACE_FILES_JSON;
         let persistentStoreData = REPLACE_STORE_DATA_JSON;
         let storeInventoryData = {};
+
+        function openFileDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open('oz_store_files', 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        function base64ToBlob(base64, type) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return new Blob([bytes], { type: type || 'application/octet-stream' });
+        }
+
+        async function saveLocalFile(spk, cat, file, base64, replaceFormatted) {
+            const db = await openFileDB();
+            if (replaceFormatted) {
+                const existing = await new Promise((resolve) => {
+                    const req = db.transaction('files', 'readonly').objectStore('files').getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                const tx = db.transaction('files', 'readwrite');
+                existing.filter(f => f.spk === spk && f.category === cat && String(f.filename).includes('_Formatted_Inventory'))
+                    .forEach(f => tx.objectStore('files').delete(f.id));
+                await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+                if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
+                    storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => !String(f.filename).includes('_Formatted_Inventory'));
+                }
+            }
+            const id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+            const rec = { id, spk, category: cat, filename: file.name, type: file.type || '', base64 };
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction('files', 'readwrite');
+                tx.objectStore('files').put(rec);
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+            if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+            storedFilesMap[spk][cat].push({ id, filename: file.name, local: true });
+            renderStoredFiles();
+            return id;
+        }
+
+        async function loadFilesFromDB(spk) {
+            try {
+                const db = await openFileDB();
+                const all = await new Promise((resolve) => {
+                    const req = db.transaction('files', 'readonly').objectStore('files').getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                all.filter(f => f.spk === spk).forEach(f => {
+                    if (!storedFilesMap[spk][f.category]) storedFilesMap[spk][f.category] = [];
+                    if (!storedFilesMap[spk][f.category].some(x => x.id === f.id)) {
+                        storedFilesMap[spk][f.category].push({ id: f.id, filename: f.filename, local: true });
+                    }
+                });
+                renderStoredFiles();
+                await reparseStoredReports(spk, all);
+            } catch (e) {
+                console.error('file db load', e);
+            }
+        }
+
+        async function reparseStoredReports(spk, all) {
+            const files = (all || []).filter(f => f.spk === spk && (f.category === 'green2' || f.category === 'green3') && String(f.filename).toLowerCase().endsWith('.csv'));
+            if (!files.length || !window.Papa) return;
+            for (const f of files) {
+                const text = atob(f.base64);
+                await new Promise((resolve) => {
+                    Papa.parse(text, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: function(results) {
+                            extractFinancialNumbers(spk, f.category, results.data);
+                            resolve();
+                        },
+                        error: resolve
+                    });
+                });
+            }
+            updateFinancialSummary();
+        }
+
+        function downloadLocalFile(id) {
+            openFileDB().then(db => {
+                const req = db.transaction('files', 'readonly').objectStore('files').get(String(id));
+                req.onsuccess = () => {
+                    const rec = req.result;
+                    if (!rec) return;
+                    const blob = base64ToBlob(rec.base64, rec.type);
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = rec.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                };
+            });
+        }
+
+        async function deleteLocalFile(id) {
+            try {
+                const db = await openFileDB();
+                await new Promise((resolve) => {
+                    const tx = db.transaction('files', 'readwrite');
+                    tx.objectStore('files').delete(String(id));
+                    tx.oncomplete = resolve;
+                    tx.onerror = resolve;
+                });
+            } catch (e) {}
+        }
 
         function isBlankSpacerRow(row) {
             if (!row) return true;
@@ -1110,6 +1240,14 @@ html_code = """
         }
 
         function initApp() {
+            try {
+                const m = localStorage.getItem('oz_month');
+                const y = localStorage.getItem('oz_year');
+                if (m) { document.getElementById('select-month').value = m; selectedMonth = m; }
+                if (y) { document.getElementById('select-year').value = y; selectedYear = y; }
+                document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
+                document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
+            } catch(e) {}
             renderTabs();
             loadStorePeriodData();
             setupCSVParser();
@@ -1138,6 +1276,10 @@ html_code = """
         function updatePeriod() {
             selectedMonth = document.getElementById('select-month').value;
             selectedYear = document.getElementById('select-year').value;
+            try {
+                localStorage.setItem('oz_month', selectedMonth);
+                localStorage.setItem('oz_year', selectedYear);
+            } catch(e) {}
             document.getElementById('active-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             document.getElementById('portal-period-label').textContent = `${selectedMonth} ${selectedYear}`;
             loadStorePeriodData();
@@ -1249,6 +1391,7 @@ html_code = """
             renderStoredFiles();
             updateCompletionBadge();
             updateFinancialSummary();
+            loadFilesFromDB(spk);
         }
 
         function setupCSVParser() {
@@ -1257,6 +1400,7 @@ html_code = """
             if(!dropZone || !fileInput) return;
 
             dropZone.onclick = () => fileInput.click();
+            fileInput.onclick = (e) => e.stopPropagation();
             dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-emerald-600', 'bg-emerald-50/50'); };
             dropZone.ondragleave = () => dropZone.classList.remove('border-emerald-600', 'bg-emerald-50/50');
             dropZone.ondrop = (e) => {
@@ -1271,11 +1415,18 @@ html_code = """
         }
 
         function handleCSVFile(file) {
+            if (!window.Papa) {
+                alert('The CSV reader did not load. Refresh the page and try again.');
+                return;
+            }
             Papa.parse(file, {
                 header: true,
                 skipEmptyLines: true,
                 complete: function(results) {
                     processParsedCSV(results.meta.fields, results.data, file.name);
+                },
+                error: function() {
+                    alert('Could not read that CSV. Check that it is a Greenline inventory export.');
                 }
             });
         }
@@ -1289,28 +1440,20 @@ html_code = """
 
             renderInventoryTable();
             showCSVFileInfo(fileName);
-            updateFinancialSummary();
 
             const green1Chk = document.getElementById('green1-chk');
             if (green1Chk) green1Chk.checked = true;
             updateCompletionBadge();
             saveAllData(true);
+            updateFinancialSummary();
 
             const wb = buildFormattedWorkbook(cleanFields, sortedRows, `${activeStore} Inventory`);
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.xlsx`;
             const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
-
-            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-            storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !String(f.filename).includes('_Formatted_Inventory'));
-            storedFilesMap[spk]['green1'].push({ id: 'local-formatted', filename: formattedFileName });
-
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_file');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('category', 'green1');
-            currentUrl.searchParams.set('filename', formattedFileName);
-            currentUrl.searchParams.set('file_b64', base64Data);
-            window.location.href = currentUrl.toString();
+            saveLocalFile(spk, 'green1', {
+                name: formattedFileName,
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            }, base64Data, true);
         }
 
         function renderInventoryTable() {
@@ -1505,19 +1648,7 @@ html_code = """
             }
 
             if (isSilent) return;
-
-            const currentUrl = new URL(window.location.href);
-            currentUrl.searchParams.set('action', 'save_checklist');
-            currentUrl.searchParams.set('spk', spk);
-            currentUrl.searchParams.set('cooh_text', notes['cooh']);
-            currentUrl.searchParams.set('cooh_date', dates['cooh']);
-            currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
-            currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
-            if (inv) {
-                currentUrl.searchParams.set('inventory_json', JSON.stringify({ headers: inv.headers, rows: inv.rows }));
-                currentUrl.searchParams.set('inventory_filename', inv.fileName);
-            }
-            window.location.href = currentUrl.toString();
+            // Stay on the page. Navigating to save through the URL drops uploads and wipes the form.
         }
 
         function updateCompletionBadge() {
@@ -1554,54 +1685,36 @@ html_code = """
         }
 
         function handleItemFiles(cat, inputElem) {
-            if (inputElem.files && inputElem.files.length > 0) {
-                const spk = getSPK();
-                markChecklistItem(cat);
-                saveAllData(true);
-                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-
-                const uploadFile = (file) => {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-                        const currentUrl = new URL(window.location.href);
-                        currentUrl.searchParams.set('action', 'save_file');
-                        currentUrl.searchParams.set('spk', spk);
-                        currentUrl.searchParams.set('category', cat);
-                        currentUrl.searchParams.set('filename', file.name);
-                        currentUrl.searchParams.set('file_b64', base64Data);
-                        window.location.href = currentUrl.toString();
-                    };
-                    reader.readAsArrayBuffer(file);
-                };
-                Array.from(inputElem.files).forEach((file) => {
+            if (!inputElem.files || !inputElem.files.length) return;
+            const spk = getSPK();
+            markChecklistItem(cat);
+            Array.from(inputElem.files).forEach((file) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const base64Data = bytesToBase64(new Uint8Array(e.target.result));
+                    saveLocalFile(spk, cat, file, base64Data);
                     if (file.name.toLowerCase().endsWith('.csv') && (cat === 'green2' || cat === 'green3') && window.Papa) {
                         Papa.parse(file, {
                             header: true,
                             skipEmptyLines: true,
                             complete: function(results) {
                                 extractFinancialNumbers(spk, cat, results.data);
-                                try { localStorage.setItem('oz_financials_' + spk, JSON.stringify(parsedFinancials[spk] || {})); } catch(e) {}
-                                uploadFile(file);
+                                updateFinancialSummary();
                             }
                         });
-                    } else {
-                        uploadFile(file);
                     }
-                });
-                inputElem.value = '';
-            }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+            inputElem.value = '';
+            saveAllData(true);
         }
 
         function handleRemoveFile(cat, fileId) {
             const spk = getSPK();
             if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
-                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => f.id !== fileId);
-                if (Number.isInteger(fileId)) {
-                    fetch(`http://127.0.0.1:8513/api/delete_file?id=${fileId}`, { method: 'POST' })
-                        .catch(err => console.error('Delete error:', err));
-                }
+                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => String(f.id) !== String(fileId));
+                deleteLocalFile(fileId);
                 renderStoredFiles();
                 scheduleAutoSave();
             }
@@ -1610,9 +1723,9 @@ html_code = """
         function clearUploadField(cat) {
             if (confirm(`Clear all files for this category?`)) {
                 const spk = getSPK();
-                if (storedFilesMap[spk]) {
-                    storedFilesMap[spk][cat] = [];
-                }
+                const existing = (storedFilesMap[spk] && storedFilesMap[spk][cat]) ? storedFilesMap[spk][cat].slice() : [];
+                existing.forEach(f => deleteLocalFile(f.id));
+                if (storedFilesMap[spk]) storedFilesMap[spk][cat] = [];
                 renderStoredFiles();
                 scheduleAutoSave();
             }
@@ -1631,22 +1744,18 @@ html_code = """
 
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
-                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">X</button>`;
-                        if (Number.isInteger(f.id)) {
-                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">Download</button>`;
-                        }
+                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">${f.filename}`;
+                        chip += ` <button type="button" onclick="downloadLocalFile('${f.id}')" class="text-blue-700 font-bold ml-1 hover:text-blue-900">Download</button>`;
+                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-600 font-bold ml-1 hover:text-red-800">Delete</button>`;
                         chip += `</span>`;
                         return chip;
                     }).join('');
                     box.innerHTML = html;
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
-                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">X</button>`;
-                            if (Number.isInteger(f.id)) {
-                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">Download</button>`;
-                            }
+                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">${f.filename}`;
+                            chip += ` <button type="button" onclick="downloadLocalFile('${f.id}')" class="text-blue-300 font-bold ml-1 hover:text-blue-200">Download</button>`;
+                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-400 font-bold ml-1 hover:text-red-300">Delete</button>`;
                             chip += `</span>`;
                             return chip;
                         }).join('');
@@ -1658,18 +1767,28 @@ html_code = """
             });
         }
 
-        function downloadMasterZip() {
+        async function downloadMasterZip() {
             const spk = getSPK();
             const cats = ['cooh', 'brinks', 'green1', 'green2', 'green3', 'mon1', 'mon2', 'ocs1', 'ocs2', 'chargebacks', 'gas1', 'gas2'];
             const zip = new JSZip();
             let fileCount = 0;
+            const db = await openFileDB();
+            const all = await new Promise((resolve) => {
+                const req = db.transaction('files', 'readonly').objectStore('files').getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => resolve([]);
+            });
+            const byId = {};
+            all.forEach(f => { byId[f.id] = f; });
 
             cats.forEach(cat => {
                 const fileList = (storedFilesMap[spk] && storedFilesMap[spk][cat]) ? storedFilesMap[spk][cat] : [];
                 if (fileList.length > 0) {
                     const folder = zip.folder(cat);
                     fileList.forEach(f => {
-                        folder.file(f.filename, `Simulated content for ${f.filename}`);
+                        const rec = byId[f.id];
+                        if (rec && rec.base64) folder.file(f.filename, base64ToBlob(rec.base64, rec.type));
+                        else folder.file(f.filename, `Saved file: ${f.filename}`);
                         fileCount++;
                     });
                 }
