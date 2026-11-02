@@ -1530,7 +1530,7 @@ html_code = """
             document.getElementById('fin-margin').textContent = margin.toFixed(1) + '%';
         }
 
-        function generateReport() {
+        function showInfographicReport(detailed = false) {
             updateFinancialSummary();
             const spk = getSPK();
             const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
@@ -1541,59 +1541,91 @@ html_code = """
             const net = document.getElementById('fin-net').textContent;
             const margin = document.getElementById('fin-margin').textContent;
 
-            alert(
-                `Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n` +
-                `Cash On Hand (End of Day): ${cooh}\n` +
-                `Cash On Hand (End of Last Month): ${coohLast}\n` +
-                `Total Brinks Deposit: ${brinksDep}\n\n` +
-                `Total Sales: ${totalSales}\n` +
-                `Total Expenses: ${totalExp}\n` +
-                `Estimated Net: ${net}\n` +
-                `Net Margin: ${margin}`
-            );
+            const expenseItems = [
+                ['Rent', document.getElementById('exp-rent')?.value],
+                ['Utilities', document.getElementById('exp-utilities')?.value],
+                ['Insurance', document.getElementById('exp-insurance')?.value],
+                ['Employee Salary', document.getElementById('exp-salary')?.value],
+                ['Credit Card', document.getElementById('exp-cc')?.value],
+                ['Advertising & Signage', document.getElementById('exp-ads')?.value],
+                ['Repairs', document.getElementById('exp-repairs')?.value],
+                ['Other', document.getElementById('exp-other')?.value]
+            ];
+
+            let expenseHtml = expenseItems.map(([label, val]) => 
+                `<div class="flex justify-between text-sm py-1 border-b border-emerald-800/50">
+                    <span class="text-emerald-200">${label}</span>
+                    <span class="font-medium">$${parseNum(val).toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+                </div>`
+            ).join('');
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+            modal.innerHTML = `
+                <div style="background:#022c22;border:1px solid #065f46;border-radius:16px;max-width:720px;width:100%;max-height:90vh;overflow:auto;color:white;padding:28px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                        <div>
+                            <h2 style="margin:0;font-size:22px;color:#6ee7b7;">Business Health Infographic</h2>
+                            <p style="margin:4px 0 0;font-size:13px;color:#a7f3d0;">${activeStore} • ${selectedMonth} ${selectedYear}</p>
+                        </div>
+                        <button onclick="this.closest('div').parentElement.remove()" style="background:#065f46;border:none;color:white;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px;">×</button>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
+                            <div style="font-size:12px;color:#6ee7b7;">Cash on Hand (EOD)</div>
+                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${cooh}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
+                            <div style="font-size:12px;color:#6ee7b7;">Cash End of Last Month</div>
+                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${coohLast}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
+                            <div style="font-size:12px;color:#6ee7b7;">Brinks Deposit</div>
+                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${brinksDep}</div>
+                        </div>
+                        <div style="background:#064e3b;padding:14px;border-radius:12px;text-align:center;">
+                            <div style="font-size:12px;color:#6ee7b7;">Total Sales</div>
+                            <div style="font-size:20px;font-weight:bold;margin-top:4px;">${totalSales}</div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+                        <div style="background:#064e3b;padding:16px;border-radius:12px;">
+                            <h3 style="margin:0 0 10px;font-size:14px;color:#6ee7b7;">Expense Breakdown</h3>
+                            ${expenseHtml}
+                            <div style="display:flex;justify-content:space-between;font-weight:bold;margin-top:8px;padding-top:8px;border-top:1px solid #065f46;">
+                                <span>Total Expenses</span>
+                                <span>${totalExp}</span>
+                            </div>
+                        </div>
+                        <div style="background:#064e3b;padding:16px;border-radius:12px;display:flex;flex-direction:column;justify-content:center;text-align:center;">
+                            <div style="font-size:13px;color:#6ee7b7;">Estimated Net Profit</div>
+                            <div style="font-size:32px;font-weight:bold;margin:8px 0;">${net}</div>
+                            <div style="font-size:13px;color:#6ee7b7;">Net Margin</div>
+                            <div style="font-size:28px;font-weight:bold;color:#34d399;">${margin}</div>
+                        </div>
+                    </div>
+
+                    ${detailed ? `<div style="background:#064e3b;padding:14px;border-radius:12px;font-size:13px;">
+                        <strong>Cash Consolidation Note:</strong> Compare End of Day cash (${cooh}) against End of Last Month (${coohLast}) and Brinks deposits to track cash movement.
+                    </div>` : ''}
+
+                    <div style="margin-top:16px;text-align:right;">
+                        <button onclick="window.print()" style="background:#065f46;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-right:8px;">Print</button>
+                        <button onclick="this.closest('div').parentElement.remove()" style="background:#374151;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        function generateReport() {
+            showInfographicReport(false);
         }
 
         function generateDetailedReport() {
-            updateFinancialSummary();
-            const spk = getSPK();
-            const cooh = document.getElementById('cooh-text')?.value || 'Not entered';
-            const coohLast = document.getElementById('cooh-last-month')?.value || 'Not entered';
-            const brinksDep = document.getElementById('brinks-total-deposit')?.value || 'Not entered';
-            const chargebacks = document.getElementById('chargebacks-text')?.value || 'Nothing to report.';
-            const inv = storeInventoryData[spk];
-
-            let detail = `Detailed Monthly Report — ${activeStore} ${selectedMonth} ${selectedYear}\n\n`;
-            detail += `Cash On Hand (End of Day): ${cooh}\n`;
-            detail += `Cash On Hand (End of Last Month): ${coohLast}\n`;
-            detail += `Total Brinks Deposit: ${brinksDep}\n`;
-            detail += `Chargebacks: ${chargebacks}\n\n`;
-
-            detail += `Expenses:\n`;
-            detail += `  Rent: $${parseNum(document.getElementById('exp-rent')?.value).toFixed(2)}\n`;
-            detail += `  Utilities: $${parseNum(document.getElementById('exp-utilities')?.value).toFixed(2)}\n`;
-            detail += `  Insurance: $${parseNum(document.getElementById('exp-insurance')?.value).toFixed(2)}\n`;
-            detail += `  Employee Salary: $${parseNum(document.getElementById('exp-salary')?.value).toFixed(2)}\n`;
-            detail += `  Credit Card: $${parseNum(document.getElementById('exp-cc')?.value).toFixed(2)}\n`;
-            detail += `  Advertising & Signage: $${parseNum(document.getElementById('exp-ads')?.value).toFixed(2)}\n`;
-            detail += `  Repairs: $${parseNum(document.getElementById('exp-repairs')?.value).toFixed(2)}\n`;
-            detail += `  Other: $${parseNum(document.getElementById('exp-other')?.value).toFixed(2)}\n\n`;
-
-            detail += `Total Sales: ${document.getElementById('fin-total-sales').textContent}\n`;
-            detail += `Total Expenses: ${document.getElementById('fin-total-exp').textContent}\n`;
-            detail += `Estimated Net: ${document.getElementById('fin-net').textContent}\n`;
-            detail += `Net Margin: ${document.getElementById('fin-margin').textContent}\n\n`;
-
-            if (inv && inv.rows) {
-                detail += `Inventory Sold by Category:\n`;
-                inv.rows.forEach(r => {
-                    const cat = r.Category || 'Unknown';
-                    const sold = r.Sold || r.sold || 0;
-                    detail += `  ${cat}: ${sold}\n`;
-                });
-            } else {
-                detail += `No inventory data loaded.\n`;
-            }
-            alert(detail);
+            showInfographicReport(true);
         }
 
         // Call financial update whenever relevant data changes
