@@ -579,8 +579,8 @@ html_code = """
 
                         <div class="bg-white rounded-lg border border-zinc-200 overflow-hidden max-h-56 overflow-y-auto mb-4 shadow-xs">
                             <table class="w-full text-left border-collapse text-[11px]">
-                                <thead class="bg-emerald-50 text-emerald-900 sticky top-0 z-10 border-b border-emerald-200">
-                                    <tr id="table-header"><th class="p-2 font-semibold">Category</th><th class="p-2 font-semibold">Opening</th><th class="p-2 font-semibold">Sold</th><th class="p-2 font-semibold">Closing</th></tr>
+                                <thead class="bg-emerald-700 text-white sticky top-0 z-10 border-b border-emerald-800">
+                                    <tr id="table-header"><th class="p-2 font-semibold" style="background:#065f46;color:white;">Category</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Opening</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Sold</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Closing</th></tr>
                                 </thead>
                                 <tbody id="table-body" class="divide-y divide-zinc-100 text-zinc-700"><tr><td colspan="4" class="p-4 text-center text-zinc-400">No report uploaded yet.</td></tr></tbody>
                             </table>
@@ -1251,7 +1251,7 @@ html_code = """
             const infoBox = document.getElementById('csv-file-info');
 
             if (!inv) {
-                tableHeader.innerHTML = `<th class="p-2 font-semibold bg-emerald-700 text-white">Category</th><th class="p-2 font-semibold bg-emerald-700 text-white">Opening</th><th class="p-2 font-semibold bg-emerald-700 text-white">Sold</th><th class="p-2 font-semibold bg-emerald-700 text-white">Closing</th>`;
+                tableHeader.innerHTML = `<th class="p-2 font-semibold" style="background:#065f46;color:white;">Category</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Opening</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Sold</th><th class="p-2 font-semibold" style="background:#065f46;color:white;">Closing</th>`;
                 tableBody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-zinc-400">No report uploaded yet.</td></tr>`;
                 actionArea.classList.add('hidden');
                 invStatusBadge.textContent = "Not Loaded";
@@ -1265,7 +1265,11 @@ html_code = """
             const rows = inv.rows;
             const displayHeaders = headers.includes('Opening') ? ['Category', 'Opening', 'Sold', 'Closing'] : [headers[0], headers[1], headers[2]];
 
-            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold bg-emerald-700 text-white">${h}</th>`).join('');
+            tableHeader.innerHTML = displayHeaders.map(h => `<th class="p-2 font-semibold" style="background:#065f46;color:white;">${h}</th>`).join('');
+            // Force thead background as well
+            const thead = tableHeader.closest('thead');
+            if (thead) thead.style.background = '#065f46';
+
             tableBody.innerHTML = rows.map(row => {
                 const isSpacer = !row.Category || String(row.Category).trim() === '';
                 if (isSpacer) {
