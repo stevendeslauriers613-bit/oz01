@@ -15,38 +15,103 @@ import streamlit.components.v1 as components
 # Suppress deprecation warning for components.html
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-# --- DROPBOX SETUP ---
+# --- DROPBOX SETUP (HTTP API, works on Streamlit Cloud without the SDK) ---
 DROPBOX_CREDENTIALS_FILE = "dropbox_credentials.json"
 DROPBOX_FOLDER_PATH = "/OZ_Store_Uploads"
 
 
-def get_dropbox_client():
-    """Get authenticated Dropbox client."""
+def load_dropbox_creds():
+    creds = {}
     try:
-        import dropbox
-        if not os.path.exists(DROPBOX_CREDENTIALS_FILE):
-            return None
-        with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
-            creds = json.load(f)
-        access_token = creds.get("access_token")
-        if not access_token:
-            return None
-        return dropbox.Dropbox(access_token)
-    except Exception as e:
-        return None
-
-
-def ensure_dropbox_folder(dbx):
-    try:
-        dbx.files_get_metadata(DROPBOX_FOLDER_PATH)
+        if hasattr(st, "secrets"):
+            sec = st.secrets.get("dropbox", {})
+            if sec:
+                creds.update(dict(sec))
+            for key in ("DROPBOX_APP_KEY", "DROPBOX_APP_SECRET", "DROPBOX_REFRESH_TOKEN", "DROPBOX_ACCESS_TOKEN"):
+                if key in st.secrets:
+                    creds[key.lower()] = st.secrets[key]
     except Exception:
-        dbx.files_create_folder_v2(DROPBOX_FOLDER_PATH)
+        pass
+    if os.path.exists(DROPBOX_CREDENTIALS_FILE):
+        try:
+            with open(DROPBOX_CREDENTIALS_FILE, "r") as f:
+                creds.update(json.load(f))
+        except Exception:
+            pass
+    return creds
 
 
-def upload_to_dropbox(dbx, filename, file_data):
-    dropbox_path = f"{DROPBOX_FOLDER_PATH}/{filename}"
-    dbx.files_upload(file_data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-    return f"dropbox://{dropbox_path}"
+def get_dropbox_access_token():
+    creds = load_dropbox_creds()
+    refresh = creds.get("refresh_token") or creds.get("dropbox_refresh_token")
+    app_key = creds.get("app_key") or creds.get("dropbox_app_key")
+    app_secret = creds.get("app_secret") or creds.get("dropbox_app_secret")
+    access = creds.get("access_token") or creds.get("dropbox_access_token")
+    if refresh and app_key and app_secret:
+        try:
+            import urllib.parse
+            import urllib.request
+            data = urllib.parse.urlencode({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+                "client_id": app_key,
+                "client_secret": app_secret,
+            }).encode()
+            req = urllib.request.Request("https://api.dropbox.com/oauth2/token", data=data)
+            with urllib.request.urlopen(req, timeout=20) as res:
+                payload = json.loads(res.read().decode())
+                return payload.get("access_token") or access
+        except Exception:
+            return access
+    return access
+
+
+def dropbox_upload(token, dropbox_path, file_data):
+    import urllib.request
+    arg = json.dumps({"path": dropbox_path, "mode": "overwrite", "autorename": False, "mute": True})
+    req = urllib.request.Request(
+        "https://content.dropboxapi.com/2/files/upload",
+        data=file_data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/octet-stream",
+            "Dropbox-API-Arg": arg,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as res:
+        return json.loads(res.read().decode())
+
+
+def dropbox_download(token, dropbox_path):
+    import urllib.request
+    arg = json.dumps({"path": dropbox_path})
+    req = urllib.request.Request(
+        "https://content.dropboxapi.com/2/files/download",
+        data=b"",
+        headers={"Authorization": f"Bearer {token}", "Dropbox-API-Arg": arg},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as res:
+        return res.read()
+
+
+def dropbox_delete(token, dropbox_path):
+    import urllib.request
+    body = json.dumps({"path": dropbox_path}).encode()
+    req = urllib.request.Request(
+        "https://api.dropboxapi.com/2/files/delete_v2",
+        data=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return res.read()
+
+
+def get_dropbox_client():
+    # Kept so older call sites still resolve. Returns the access token or None.
+    return get_dropbox_access_token()
 
 
 # Set page configuration
@@ -152,6 +217,27 @@ if "action" in query_params:
             )
             conn.commit()
 
+    elif action == "register_file":
+        spk = query_params.get("spk", "")
+        category = query_params.get("category", "")
+        filename = query_params.get("filename", "")
+        path = query_params.get("path", "")
+        if spk and category and filename and path:
+            filepath = path if path.startswith("dropbox://") else f"dropbox://{path}"
+            cursor.execute(
+                "SELECT id FROM store_files WHERE store_period_key = ? AND category = ? AND filename = ?",
+                (spk, category, filename),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute("UPDATE store_files SET filepath = ? WHERE id = ?", (filepath, existing[0]))
+            else:
+                cursor.execute(
+                    "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+                    (spk, category, filename, filepath),
+                )
+            conn.commit()
+
     elif action == "delete_file":
         file_id = query_params.get("file_id")
         if file_id:
@@ -160,10 +246,10 @@ if "action" in query_params:
             if f_row:
                 filepath = f_row[0]
                 if filepath.startswith("dropbox://"):
-                    dbx = get_dropbox_client()
-                    if dbx:
+                    token = get_dropbox_access_token()
+                    if token:
                         try:
-                            dbx.files_delete_v2(filepath.replace("dropbox://", ""))
+                            dropbox_delete(token, filepath.replace("dropbox://", ""))
                         except Exception:
                             pass
                 elif os.path.exists(filepath):
@@ -173,6 +259,28 @@ if "action" in query_params:
                         pass
             cursor.execute("DELETE FROM store_files WHERE id = ?", (file_id,))
             conn.commit()
+
+    elif action == "download_file":
+        file_id = query_params.get("file_id")
+        if file_id:
+            cursor.execute("SELECT filename, filepath FROM store_files WHERE id = ?", (file_id,))
+            f_row = cursor.fetchone()
+            if f_row:
+                filename, filepath = f_row
+                data = None
+                if filepath.startswith("dropbox://"):
+                    token = get_dropbox_access_token()
+                    if token:
+                        try:
+                            data = dropbox_download(token, filepath.replace("dropbox://", ""))
+                        except Exception as exc:
+                            st.error(f"Dropbox download failed: {exc}")
+                elif os.path.exists(filepath):
+                    with open(filepath, "rb") as f:
+                        data = f.read()
+                if data is not None:
+                    st.download_button(f"Download {filename}", data=data, file_name=filename, key=f"dl_{file_id}")
+                    st.stop()
 
     elif action == "sign_out":
         st.session_state.logged_in = False
@@ -287,6 +395,7 @@ conn.close()
 
 current_role = st.session_state.role
 current_name = st.session_state.name
+dropbox_token = get_dropbox_access_token()
 is_store_manager = "true" if current_role == "store" else "false"
 is_admin = "true" if current_role == "admin" else "false"
 
@@ -898,7 +1007,155 @@ html_code = """
 
         let storedFilesMap = REPLACE_FILES_JSON;
         let persistentStoreData = REPLACE_STORE_DATA_JSON;
+        const DROPBOX_TOKEN = "REPLACE_DROPBOX_TOKEN";
+        const DROPBOX_FOLDER = "REPLACE_DROPBOX_FOLDER";
+
+        function markChecklistItem(key) {
+            const chk = document.getElementById(`${key}-chk`);
+            if (chk) chk.checked = true;
+            updateCompletionBadge();
+        }
+
+        async function uploadToDropboxAndRegister(spk, cat, file) {
+            if (!DROPBOX_TOKEN) {
+                alert('Dropbox is not connected on the server. Use the Upload to Dropbox box above the checklist, after the Dropbox secrets are set.');
+                return;
+            }
+            const safeName = file.name.replace(/[\\/]/g, '_');
+            const path = `${DROPBOX_FOLDER}/files/${spk}/${cat}/${safeName}`;
+            const res = await fetch('https://content.dropboxapi.com/2/files/upload', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + DROPBOX_TOKEN,
+                    'Content-Type': 'application/octet-stream',
+                    'Dropbox-API-Arg': JSON.stringify({ path: path, mode: 'overwrite', autorename: false, mute: true })
+                },
+                body: file
+            });
+            if (!res.ok) {
+                const err = await res.text();
+                alert('Dropbox upload failed: ' + err);
+                return;
+            }
+            const target = window.top && window.top.location ? window.top : window;
+            const url = new URL(target.location.href);
+            url.searchParams.set('action', 'register_file');
+            url.searchParams.set('spk', spk);
+            url.searchParams.set('category', cat);
+            url.searchParams.set('filename', safeName);
+            url.searchParams.set('path', path);
+            target.location.href = url.toString();
+        }
         let storeInventoryData = {};
+
+        function openFileDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open('oz_store_files', 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        function base64ToBlob(base64, type) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return new Blob([bytes], { type: type || 'application/octet-stream' });
+        }
+
+        async function saveLocalFile(spk, cat, file, base64, replaceFormatted) {
+            const db = await openFileDB();
+            if (replaceFormatted) {
+                const existing = await new Promise((resolve) => {
+                    const req = db.transaction('files', 'readonly').objectStore('files').getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                const tx = db.transaction('files', 'readwrite');
+                existing.filter(f => f.spk === spk && f.category === cat && String(f.filename).includes('_Formatted_Inventory'))
+                    .forEach(f => tx.objectStore('files').delete(f.id));
+                await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+                if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
+                    storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => !String(f.filename).includes('_Formatted_Inventory'));
+                }
+            }
+            const id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+            const rec = { id, spk, category: cat, filename: file.name, type: file.type || '', base64 };
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction('files', 'readwrite');
+                tx.objectStore('files').put(rec);
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+            if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+            if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
+            storedFilesMap[spk][cat].push({ id, filename: file.name, local: true });
+            renderStoredFiles();
+            return id;
+        }
+
+        async function loadFilesFromDB(spk) {
+            try {
+                const db = await openFileDB();
+                const all = await new Promise((resolve) => {
+                    const req = db.transaction('files', 'readonly').objectStore('files').getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
+                all.filter(f => f.spk === spk).forEach(f => {
+                    if (!storedFilesMap[spk][f.category]) storedFilesMap[spk][f.category] = [];
+                    if (!storedFilesMap[spk][f.category].some(x => x.id === f.id)) {
+                        storedFilesMap[spk][f.category].push({ id: f.id, filename: f.filename, local: true });
+                    }
+                });
+                renderStoredFiles();
+            } catch (e) {
+                console.error('file db load', e);
+            }
+        }
+
+        function downloadLocalFile(id) {
+            openFileDB().then(db => {
+                const req = db.transaction('files', 'readonly').objectStore('files').get(String(id));
+                req.onsuccess = () => {
+                    const rec = req.result;
+                    if (!rec) return;
+                    const blob = base64ToBlob(rec.base64, rec.type);
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = rec.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                };
+            });
+        }
+
+        async function deleteLocalFile(id) {
+            try {
+                const db = await openFileDB();
+                await new Promise((resolve) => {
+                    const tx = db.transaction('files', 'readwrite');
+                    tx.objectStore('files').delete(String(id));
+                    tx.oncomplete = resolve;
+                    tx.onerror = resolve;
+                });
+            } catch (e) {}
+        }
 
         function initApp() {
             renderTabs();
@@ -1021,6 +1278,7 @@ html_code = """
             renderStoredFiles();
             updateCompletionBadge();
             updateFinancialSummary();
+            loadFilesFromDB(spk);
         }
 
         function setupCSVParser() {
@@ -1085,34 +1343,12 @@ html_code = """
 
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
             const csvContent = Papa.unparse(sortedRows);
-            const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
-
-            fetch('http://127.0.0.1:8513/api/upload_file', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    store_period_key: spk,
-                    category: 'green1',
-                    filename: formattedFileName,
-                    file_data: base64Data
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                    storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory.csv'));
-                    storedFilesMap[spk]['green1'].push({ id: data.id, filename: formattedFileName });
-
-                    const green1Chk = document.getElementById('green1-chk');
-                    if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
-
-                    renderStoredFiles();
-                    updateCompletionBadge();
-                    scheduleAutoSave();
-                }
-            })
-            .catch(err => console.error('Auto-upload error:', err));
+            const formattedFile = new File([csvContent], formattedFileName, { type: 'text/csv' });
+            uploadToDropboxAndRegister(spk, 'green1', formattedFile);
+            const green1Chk = document.getElementById('green1-chk');
+            if (green1Chk && !green1Chk.checked) green1Chk.checked = true;
+            updateCompletionBadge();
+            scheduleAutoSave();
         }
 
         function renderInventoryTable() {
@@ -1334,51 +1570,18 @@ html_code = """
         }
 
         function handleItemFiles(cat, inputElem) {
-            if (inputElem.files && inputElem.files.length > 0) {
-                const spk = getSPK();
-                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-
-                Array.from(inputElem.files).forEach((file, idx) => {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-                        fetch('http://127.0.0.1:8513/api/upload_file', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({
-                                store_period_key: spk,
-                                category: cat,
-                                filename: file.name,
-                                file_data: base64Data
-                            })
-                        })
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.success) {
-                                if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
-                                if (!storedFilesMap[spk][cat]) storedFilesMap[spk][cat] = [];
-                                storedFilesMap[spk][cat].push({ id: data.id, filename: file.name });
-                                renderStoredFiles();
-                                scheduleAutoSave();
-                            }
-                        })
-                        .catch(err => console.error('Upload error:', err));
-                    };
-                    reader.readAsArrayBuffer(file);
-                });
-                inputElem.value = '';
-            }
+            if (!inputElem.files || !inputElem.files.length) return;
+            const spk = getSPK();
+            markChecklistItem(cat);
+            Array.from(inputElem.files).forEach((file) => uploadToDropboxAndRegister(spk, cat, file));
+            inputElem.value = '';
         }
 
         function handleRemoveFile(cat, fileId) {
             const spk = getSPK();
             if (storedFilesMap[spk] && storedFilesMap[spk][cat]) {
-                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => f.id !== fileId);
-                if (Number.isInteger(fileId)) {
-                    fetch(`http://127.0.0.1:8513/api/delete_file?id=${fileId}`, { method: 'POST' })
-                        .catch(err => console.error('Delete error:', err));
-                }
+                storedFilesMap[spk][cat] = storedFilesMap[spk][cat].filter(f => String(f.id) !== String(fileId));
+                deleteLocalFile(fileId);
                 renderStoredFiles();
                 scheduleAutoSave();
             }
@@ -1387,9 +1590,9 @@ html_code = """
         function clearUploadField(cat) {
             if (confirm(`Clear all files for this category?`)) {
                 const spk = getSPK();
-                if (storedFilesMap[spk]) {
-                    storedFilesMap[spk][cat] = [];
-                }
+                const existing = (storedFilesMap[spk] && storedFilesMap[spk][cat]) ? storedFilesMap[spk][cat].slice() : [];
+                existing.forEach(f => deleteLocalFile(f.id));
+                if (storedFilesMap[spk]) storedFilesMap[spk][cat] = [];
                 renderStoredFiles();
                 scheduleAutoSave();
             }
@@ -1408,22 +1611,18 @@ html_code = """
 
                 if (fileList.length > 0) {
                     let html = fileList.map(f => {
-                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-600 font-bold ml-1 hover:text-red-800">×</button>`;
-                        if (Number.isInteger(f.id)) {
-                            chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-600 font-bold ml-1 hover:text-blue-800" title="Download">⬇</button>`;
-                        }
+                        let chip = `<span class="inline-block bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">${f.filename}`;
+                        chip += ` <button type="button" onclick="downloadLocalFile('${f.id}')" class="text-blue-700 font-bold ml-1 hover:text-blue-900">Download</button>`;
+                        chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-600 font-bold ml-1 hover:text-red-800">Delete</button>`;
                         chip += `</span>`;
                         return chip;
                     }).join('');
                     box.innerHTML = html;
                     if (tableBox) {
                         tableBox.innerHTML = fileList.map(f => {
-                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">📎 ${f.filename}`;
-                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', ${f.id})" class="text-red-400 font-bold ml-1 hover:text-red-300">×</button>`;
-                            if (Number.isInteger(f.id)) {
-                                chip += ` <button type="button" onclick="window.location.href='http://127.0.0.1:8513/api/download_file?id=${f.id}'" class="text-blue-300 font-bold ml-1 hover:text-blue-200" title="Download">⬇</button>`;
-                            }
+                            let chip = `<span class="inline-block bg-emerald-800 text-emerald-200 px-1.5 py-0.5 rounded mr-1 mb-1 font-medium">${f.filename}`;
+                            chip += ` <button type="button" onclick="downloadLocalFile('${f.id}')" class="text-blue-300 font-bold ml-1 hover:text-blue-200">Download</button>`;
+                            chip += ` <button type="button" onclick="handleRemoveFile('${cat}', '${f.id}')" class="text-red-400 font-bold ml-1 hover:text-red-300">Delete</button>`;
                             chip += `</span>`;
                             return chip;
                         }).join('');
@@ -1753,6 +1952,65 @@ final_html = (
     .replace("REPLACE_IS_STORE_MANAGER", is_store_manager)
     .replace("REPLACE_FILES_JSON", files_json)
     .replace("REPLACE_STORE_DATA_JSON", store_data_json)
+    .replace("REPLACE_DROPBOX_TOKEN", dropbox_token or "")
+    .replace("REPLACE_DROPBOX_FOLDER", DROPBOX_FOLDER_PATH)
 )
+
+st.markdown("### Upload to Dropbox")
+st.caption("This saves on the server, so the file shows on every device. The checklist buttons below use the same Dropbox account.")
+up_cols = st.columns([1.2, 1, 1, 1.6, 2])
+with up_cols[0]:
+    up_store = st.selectbox("Store", ["Oz 1", "Oz 2", "Oz 3", "Oz 4", "Oz 5", "Oz 6", "Oz 7"], key="up_store")
+with up_cols[1]:
+    up_month = st.selectbox("Month", ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], index=9, key="up_month")
+with up_cols[2]:
+    up_year = st.selectbox("Year", ["2025", "2026", "2027", "2028"], index=1, key="up_year")
+with up_cols[3]:
+    up_cat = st.selectbox("Folder", [
+        ("Cash On Hand", "cooh"),
+        ("Brinks", "brinks"),
+        ("Inventory Summary", "green1"),
+        ("Financials", "green2"),
+        ("Payment Types", "green3"),
+        ("Moneris Counter", "mon1"),
+        ("Moneris Online", "mon2"),
+        ("OCS Statement", "ocs1"),
+        ("OCS Invoices", "ocs2"),
+        ("Chargebacks", "chargebacks"),
+        ("Gas Details", "gas1"),
+        ("Gas Summary", "gas2"),
+    ], format_func=lambda x: x[0], key="up_cat")
+with up_cols[4]:
+    uploaded = st.file_uploader("File", key="period_file")
+
+if uploaded is not None and dropbox_token:
+    spk = f"{up_store}_{up_month}_{up_year}"
+    safe_name = uploaded.name.replace("/", "_").replace("\\", "_")
+    dropbox_path = f"{DROPBOX_FOLDER_PATH}/files/{spk}/{up_cat[1]}/{safe_name}"
+    try:
+        dropbox_upload(dropbox_token, dropbox_path, uploaded.getvalue())
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM store_files WHERE store_period_key = ? AND category = ? AND filename = ?",
+            (spk, up_cat[1], safe_name),
+        )
+        existing = cur.fetchone()
+        filepath = f"dropbox://{dropbox_path}"
+        if existing:
+            cur.execute("UPDATE store_files SET filepath = ? WHERE id = ?", (filepath, existing[0]))
+        else:
+            cur.execute(
+                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+                (spk, up_cat[1], safe_name, filepath),
+            )
+        conn.commit()
+        conn.close()
+        st.success(f"Saved {safe_name} to Dropbox for {spk}.")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Dropbox upload failed: {exc}")
+elif uploaded is not None and not dropbox_token:
+    st.error("Dropbox is not connected. Add app_key, app_secret, and refresh_token to Streamlit secrets under [dropbox].")
 
 components.html(final_html, height=3000, scrolling=True)
