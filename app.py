@@ -119,6 +119,63 @@ def init_db():
 
 init_db()
 
+def sync_dropbox_files_to_db():
+    """Scan Dropbox /OZ_Store_Uploads/files/ and insert any missing records into store_files so they appear in the app."""
+    try:
+        import dropbox
+        dbx = get_dropbox_client()
+        if not dbx:
+            print("Dropbox client unavailable — skipping file sync")
+            return
+
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+        # Get existing filepaths so we don't duplicate
+        cursor.execute("SELECT filepath FROM store_files")
+        existing = {row[0] for row in cursor.fetchall() if row[0]}
+
+        # List everything under /OZ_Store_Uploads/files/
+        result = dbx.files_list_folder("/OZ_Store_Uploads/files", recursive=True)
+        entries = list(result.entries)
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            entries.extend(result.entries)
+
+        inserted = 0
+        for entry in entries:
+            if not isinstance(entry, dropbox.files.FileMetadata):
+                continue
+            path = entry.path_display  # e.g. /OZ_Store_Uploads/files/Oz 1_September_2026/green1/report.csv
+            if not path or f"dropbox://{path}" in existing:
+                continue
+
+            # Parse: /OZ_Store_Uploads/files/{spk}/{category}/{filename}
+            parts = path.strip("/").split("/")
+            if len(parts) < 5 or parts[0] != "OZ_Store_Uploads" or parts[1] != "files":
+                continue
+
+            spk = parts[2]
+            category = parts[3]
+            filename = "/".join(parts[4:])
+
+            dropbox_path = f"dropbox://{path}"
+            cursor.execute(
+                "INSERT INTO store_files (store_period_key, category, filename, filepath) VALUES (?, ?, ?, ?)",
+                (spk, category, filename, dropbox_path)
+            )
+            inserted += 1
+
+        if inserted:
+            conn.commit()
+            print(f"Synced {inserted} Dropbox files into the database")
+        conn.close()
+    except Exception as e:
+        print("Dropbox sync error:", e)
+
+# Run sync on startup so existing Dropbox files (including September Oz 1 & Oz 7) appear in the app
+sync_dropbox_files_to_db()
+
 # --- HANDLE QUERY PARAMETER ACTIONS ---
 query_params = st.query_params
 
@@ -154,10 +211,16 @@ if "action" in query_params:
         cooh_date = query_params.get("cooh_date", "")
         chargebacks = query_params.get("chargebacks", "Nothing to report.")
         checklist_json = query_params.get("checklist_json", "{}")
+        inventory_json = query_params.get("inventory_json", "")
+        inventory_filename = query_params.get("inventory_filename", "")
         if spk:
             cursor.execute(
-                "INSERT OR REPLACE INTO store_data (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json) VALUES (?, ?, ?, ?, ?)",
-                (spk, cooh_text, cooh_date, chargebacks, checklist_json)
+                """INSERT OR REPLACE INTO store_data 
+                   (store_period_key, cooh_text, cooh_date, chargebacks_text, checklist_json, inventory_json, inventory_filename) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (spk, cooh_text, cooh_date, chargebacks, checklist_json, 
+                 inventory_json if inventory_json else None, 
+                 inventory_filename if inventory_filename else None)
             )
             conn.commit()
 
@@ -969,6 +1032,19 @@ html_code = """
             showCSVFileInfo(fileName);
 
             const formattedFileName = `${activeStore}_${selectedMonth}_${selectedYear}_Formatted_Inventory.csv`;
+            const csvContent = Papa.unparse(sortedRows);
+            const base64Data = btoa(unescape(encodeURIComponent(csvContent)));
+
+            // Trigger a real save of the formatted CSV via the backend
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.set('action', 'save_file');
+            currentUrl.searchParams.set('spk', spk);
+            currentUrl.searchParams.set('category', 'green1');
+            currentUrl.searchParams.set('filename', formattedFileName);
+            currentUrl.searchParams.set('file_b64', base64Data);
+            window.location.href = currentUrl.toString();
+
+            // Local UI update (will be refreshed after the navigation)
             if (!storedFilesMap[spk]) storedFilesMap[spk] = {};
             storedFilesMap[spk]['green1'] = (storedFilesMap[spk]['green1'] || []).filter(f => !f.filename.includes('_Formatted_Inventory.csv'));
             storedFilesMap[spk]['green1'].push({ id: 'auto_' + Date.now(), filename: formattedFileName });
@@ -980,7 +1056,7 @@ html_code = """
 
             renderStoredFiles();
             updateCompletionBadge();
-            scheduleAutoSave();
+            // scheduleAutoSave will happen after the page reloads with the new file
         }
 
         function renderInventoryTable() {
@@ -1111,6 +1187,11 @@ html_code = """
 
             const checklistData = { checkboxes: checkboxes, notes: notes, dates: dates };
 
+            // Include inventory so it persists
+            const inv = storeInventoryData[spk] || null;
+            const inventoryJson = inv ? JSON.stringify({ headers: inv.headers, rows: inv.rows }) : "";
+            const inventoryFilename = inv ? inv.fileName : "";
+
             try {
                 localStorage.setItem('oz_data_' + spk, JSON.stringify(checklistData));
             } catch(e) {}
@@ -1124,6 +1205,7 @@ html_code = """
                 }, 2000);
             }
 
+            // Actually navigate so the Streamlit backend processes the save
             const currentUrl = new URL(window.location.href);
             currentUrl.searchParams.set('action', 'save_checklist');
             currentUrl.searchParams.set('spk', spk);
@@ -1131,7 +1213,11 @@ html_code = """
             currentUrl.searchParams.set('cooh_date', dates['cooh']);
             currentUrl.searchParams.set('chargebacks', notes['chargebacks']);
             currentUrl.searchParams.set('checklist_json', JSON.stringify(checklistData));
-            window.history.replaceState({}, '', currentUrl.toString());
+            if (inventoryJson) {
+                currentUrl.searchParams.set('inventory_json', inventoryJson);
+                currentUrl.searchParams.set('inventory_filename', inventoryFilename);
+            }
+            window.location.href = currentUrl.toString();
         }
 
         function updateCompletionBadge() {
