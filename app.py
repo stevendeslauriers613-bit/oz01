@@ -774,13 +774,13 @@ html_code = """
                     </table>
                 </div>
 
-                <!-- Monthly Financial Summary Report (Executive Owner View) -->
+                <!-- Monthly Financial Summary & Generate Report -->
                 <div class="mt-6 bg-emerald-900/40 rounded-xl border border-emerald-800 p-5">
                     <h4 class="text-base font-bold text-emerald-300 mb-4">Monthly Financial Summary & Owner Expense Report</h4>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                         <div class="bg-emerald-800/50 p-3 rounded-lg">
-                            <span class="text-xs text-emerald-300 block">Total Sales (Inventory Sold)</span>
+                            <span class="text-xs text-emerald-300 block">Total Sales (from Inventory Sold)</span>
                             <span id="fin-total-sales" class="text-lg font-bold text-white">$0.00</span>
                         </div>
                         <div class="bg-emerald-800/50 p-3 rounded-lg">
@@ -842,14 +842,16 @@ html_code = """
                         </div>
                     </div>
 
-                    <div class="bg-emerald-800/30 p-3 rounded-lg mb-3 flex justify-between items-center">
+                    <div class="bg-emerald-800/30 p-3 rounded-lg mb-4 flex justify-between items-center">
                         <span class="text-xs text-emerald-300 font-bold">Total Operating Expenses (OpEx):</span>
                         <span id="fin-total-expenses" class="text-sm font-bold text-white">$0.00</span>
                     </div>
 
-                    <div class="text-xs text-emerald-200/70">
-                        <p>Total Sales and Cost of Goods Sold (COGS) are auto-calculated from your uploaded Greenline inventory CSV. Operating Expenses are fully editable above and saved automatically when you press <b>Save All</b>.</p>
-                    </div>
+                    <button type="button" onclick="generateFullReport()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 text-sm">
+                        📊 Generate Full Monthly Report
+                    </button>
+
+                    <div id="full-report-container" class="hidden mt-6 bg-white text-zinc-900 rounded-2xl border border-emerald-200 p-6 shadow-inner"></div>
                 </div>
             </div>
 
@@ -1712,7 +1714,128 @@ html_code = """
             }
         }
 
-        initApp();
+
+        function generateFullReport() {
+            const spk = getSPK();
+            const inv = storeInventoryData[spk];
+            const parseMoney = (id) => {
+                const el = document.getElementById(id);
+                if (!el) return 0;
+                return parseFloat(String(el.value || el.textContent || '0').replace(/[^0-9.-]/g, '')) || 0;
+            };
+
+            const prevCoh = parseMoney('prev-cooh');
+            const brinksTotal = parseMoney('brinks-total');
+            const endingCoh = parseMoney('cooh-text');
+            const cashSales = 0; // Will be filled if payment data is available; placeholder for now
+
+            // Inventory totals
+            let opening = 0, purchased = 0, sold = 0, closing = 0;
+            if (inv && inv.rows) {
+                inv.rows.forEach(row => {
+                    if (isBlankSpacerRow(row)) return;
+                    opening += parseFloat(String(row.Opening || 0).replace(/[^0-9.-]/g, '')) || 0;
+                    purchased += parseFloat(String(row.Purchased || 0).replace(/[^0-9.-]/g, '')) || 0;
+                    sold += parseFloat(String(row.Sold || 0).replace(/[^0-9.-]/g, '')) || 0;
+                    closing += parseFloat(String(row.Closing || 0).replace(/[^0-9.-]/g, '')) || 0;
+                });
+            }
+
+            // Expenses
+            const expenses = {
+                'Store Rent & Lease': parseMoney('exp-rent'),
+                'Employee Salaries': parseMoney('exp-salaries'),
+                'Utilities': parseMoney('exp-utilities'),
+                'Advertising': parseMoney('exp-advertising'),
+                'Marketing': parseMoney('exp-marketing'),
+                'Data Deals & Analytics': parseMoney('exp-datadeals'),
+                'Insurance': parseMoney('exp-insurance'),
+                'Garbage Disposal': parseMoney('exp-garbage'),
+                'Security & POS Software': parseMoney('exp-security'),
+                'Licenses & Compliance': parseMoney('exp-licenses')
+            };
+            const totalExp = Object.values(expenses).reduce((a, b) => a + b, 0);
+
+            // Use sold as COGS proxy (matches Greenline Cost closely)
+            const cogs = sold || 0;
+            const netSales = sold > 0 ? sold / 0.845 : 0; // rough inverse of 15.5% margin if needed; better to use actual if available
+            // Prefer actual if we have better data later; for now use inventory sold as COGS and note it
+            const grossProfit = (netSales || cogs * 1.183) - cogs; // fallback
+            const actualGross = cogs > 0 ? (cogs * 0.183) : 0; // approximate from known ~15.5% margin pattern
+
+            const formatMoney = (n) => '$' + (n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const formatPct = (n) => (n || 0).toFixed(1) + '%';
+
+            const calculatedEnding = prevCoh + (cashSales || 0) - brinksTotal;
+            const variance = endingCoh - calculatedEnding;
+
+            const storeName = activeStore || 'Store';
+            const period = `${selectedMonth} ${selectedYear}`;
+
+            const reportHtml = `
+                <div class="space-y-6">
+                    <div class="flex justify-between items-start border-b border-zinc-200 pb-4">
+                        <div>
+                            <h2 class="text-2xl font-extrabold text-emerald-900">The Oz Store – Monthly Report</h2>
+                            <p class="text-sm text-zinc-600 mt-1">${storeName} · ${period}</p>
+                        </div>
+                        <button onclick="window.print()" class="bg-emerald-700 text-white text-xs font-semibold px-4 py-2 rounded-lg">Print / Save PDF</button>
+                    </div>
+
+                    <!-- Cash Consolidation -->
+                    <div class="bg-emerald-50 rounded-xl p-5 border border-emerald-200">
+                        <h3 class="text-lg font-bold text-emerald-900 mb-4">💵 Cash Consolidation</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-zinc-500">Beginning Cash on Hand</div><div class="text-xl font-bold text-emerald-800">${formatMoney(prevCoh)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-zinc-500">Brinks Deposits</div><div class="text-xl font-bold text-red-600">${formatMoney(brinksTotal)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-zinc-500">Ending Cash on Hand</div><div class="text-xl font-bold text-emerald-800">${formatMoney(endingCoh)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-zinc-500">Variance</div><div class="text-xl font-bold ${variance >= 0 ? 'text-emerald-600' : 'text-amber-600'}">${formatMoney(variance)}</div></div>
+                        </div>
+                        <div class="text-xs text-zinc-600 bg-white p-3 rounded-lg border">
+                            Formula: Beginning COH − Brinks Deposits = Calculated Ending. Difference from Actual Ending COH is the variance.
+                            <br><span class="font-semibold">Note:</span> Add cash sales when available from the Payment Types report for a complete reconciliation.
+                        </div>
+                    </div>
+
+                    <!-- Inventory -->
+                    <div class="bg-zinc-50 rounded-xl p-5 border border-zinc-200">
+                        <h3 class="text-lg font-bold text-zinc-900 mb-4">📦 Inventory Consolidation</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="bg-white p-3 rounded-lg border text-center"><div class="text-xs text-zinc-500">Opening</div><div class="text-lg font-bold">${formatMoney(opening)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border text-center"><div class="text-xs text-zinc-500">Purchased</div><div class="text-lg font-bold text-blue-700">${formatMoney(purchased)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border text-center"><div class="text-xs text-zinc-500">Sold / COGS</div><div class="text-lg font-bold text-red-600">${formatMoney(sold)}</div></div>
+                            <div class="bg-white p-3 rounded-lg border text-center"><div class="text-xs text-zinc-500">Closing</div><div class="text-lg font-bold text-emerald-700">${formatMoney(closing)}</div></div>
+                        </div>
+                        <div class="mt-3 text-xs text-zinc-600">Net Inventory Change: <span class="font-bold">${formatMoney(closing - opening)}</span></div>
+                    </div>
+
+                    <!-- Expenses & Bottom Line -->
+                    <div class="bg-amber-50 rounded-xl p-5 border border-amber-200">
+                        <h3 class="text-lg font-bold text-amber-900 mb-4">📊 Operating Expenses & Result</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                            ${Object.entries(expenses).map(([k,v]) => `<div class="bg-white p-2 rounded border text-xs"><div class="text-zinc-500">${k}</div><div class="font-bold">${formatMoney(v)}</div></div>`).join('')}
+                        </div>
+                        <div class="flex justify-between items-center bg-white p-4 rounded-lg border">
+                            <span class="font-bold text-zinc-800">Total Operating Expenses</span>
+                            <span class="text-xl font-bold text-amber-700">${formatMoney(totalExp)}</span>
+                        </div>
+                    </div>
+
+                    <div class="text-xs text-zinc-500 text-center pt-4 border-t">
+                        Report generated from data entered in the OZ Store app. Upload Greenline Inventory CSV and enter Cash on Hand / Brinks / Expenses for complete numbers.
+                    </div>
+                </div>
+            `;
+
+            const container = document.getElementById('full-report-container');
+            if (container) {
+                container.innerHTML = reportHtml;
+                container.classList.remove('hidden');
+                container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+                initApp();
     </script>
 </body>
 </html>
